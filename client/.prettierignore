@@ -1,0 +1,17 @@
+# Dependencies
+node_modules
+
+# Build output
+dist
+build
+
+# React Router generated types
+.react-router/
+
+# Test coverage
+coverage
+
+# Lockfiles
+package-lock.json
+pnpm-lock.yaml
+yarn.lock
