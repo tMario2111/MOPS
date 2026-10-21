@@ -1,10 +1,5 @@
-import type { Route } from "./+types/home";
-
-export function meta({}: Route.MetaArgs) {
-  return [
-    { title: "Chat App" },
-    { name: "description", content: "Sign in to Chat App" },
-  ];
+export function meta() {
+  return [{ title: 'Chat App' }, { name: 'description', content: 'Sign in to Chat App' }];
 }
 
 export default function Home() {
