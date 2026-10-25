@@ -1,0 +1,109 @@
+Table users {
+  id uuid [primary key]
+  username text [unique, not null]
+  email text [unique, not null]
+
+  public_key text [not null]
+  signing_public_key text [not null]
+  opaque_record text [not null]
+
+  wrapped_x25519_private_key text [not null]
+  wrapped_ed25519_private_key text [not null]
+  key_wrap_nonce text [not null]
+  key_wrap_salt text [not null]
+  key_wrap_params jsonb [not null]
+
+  created_at timestamptz [not null]
+  deleted_at timestamptz
+}
+
+Table friendships {
+  id integer [primary key]
+  user_a_id uuid [not null, ref: > users.id]
+  user_b_id uuid [not null, ref: > users.id]
+  status text [not null, default: 'pending']
+  initiated_by uuid [not null, ref: > users.id]
+  created_at timestamptz [not null]
+  responded_at timestamptz
+
+  indexes {
+    (user_a_id, user_b_id) [unique]
+  }
+}
+
+Table blocks {
+  id integer [primary key]
+  blocker_id uuid [not null, ref: > users.id]
+  blocked_id uuid [not null, ref: > users.id]
+  created_at timestamptz [not null]
+
+  indexes {
+    (blocker_id, blocked_id) [unique]
+  }
+}
+
+Table chats {
+  id uuid [primary key]
+  type text [not null]
+  created_by uuid [ref: > users.id]
+  current_epoch integer [not null, default: 1]
+  dm_pair_key text [unique]
+  encrypted_name text
+  created_at timestamptz [not null]
+}
+
+Table chat_members {
+  id integer [primary key]
+  chat_id uuid [not null, ref: > chats.id]
+  user_id uuid [not null, ref: > users.id]
+  role text [not null, default: 'member']
+  joined_at timestamptz [not null]
+  left_at timestamptz
+
+  indexes {
+    (chat_id, user_id) [unique]
+  }
+}
+
+Table chat_epoch_keys {
+  id integer [primary key]
+  chat_id uuid [not null, ref: > chats.id]
+  epoch integer [not null]
+  user_id uuid [not null, ref: > users.id]
+  wrapped_key text [not null]
+  wrap_nonce text [not null]
+  created_at timestamptz [not null]
+
+  indexes {
+    (chat_id, epoch, user_id) [unique]
+  }
+}
+
+Table messages {
+  id uuid [primary key]
+  chat_id uuid [not null, ref: > chats.id]
+  epoch integer [not null]
+  sender_id uuid [not null, ref: > users.id]
+  type text [not null]
+
+  ciphertext text [not null]
+  nonce text [not null]
+  signature text [not null]
+
+  client_timestamp timestamptz [not null]
+  server_seq bigint [not null]
+  created_at timestamptz [not null]
+
+  indexes {
+    (chat_id, server_seq) [unique]
+  }
+}
+
+Table admin_audit_log {
+  id bigint [primary key]
+  admin_id uuid
+  action text [not null]
+  target_type text
+  target_id text
+  created_at timestamptz [not null]
+}
