@@ -14,6 +14,7 @@
     "check": "npm run lint && npm run format:check && npm run typecheck"
   },
   "dependencies": {
+    "@cloudflare/opaque-ts": "^0.7.5",
     "@react-router/node": "^8.5.0",
     "@react-router/serve": "^8.5.0",
     "isbot": "^5.1.36",

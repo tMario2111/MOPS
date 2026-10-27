@@ -1,4 +1,13 @@
 import sodium from 'libsodium-wrappers-sumo';
+import {
+  getOpaqueConfig,
+  OpaqueClient,
+  OpaqueID,
+  KE1,
+  KE2,
+  RegistrationRequest,
+  RegistrationResponse,
+} from '@cloudflare/opaque-ts';
 
 const NONCE_BYTES = sodium.crypto_aead_xchacha20poly1305_ietf_NPUBBYTES;
 const PASSWORD_KEY_BYTES = sodium.crypto_aead_xchacha20poly1305_ietf_KEYBYTES;
@@ -6,6 +15,7 @@ const BASE64_VARIANT = sodium.base64_variants.URLSAFE_NO_PADDING;
 
 const X25519_AAD = 'mops/account/x25519-private-key/v1';
 const ED25519_AAD = 'mops/account/ed25519-private-key/v1';
+const OPAQUE_CONFIG = getOpaqueConfig(OpaqueID.OPAQUE_P256);
 
 export interface KeyWrapParams {
   algorithm: 'argon2id13';
@@ -28,6 +38,50 @@ export interface WrappedAccountKeys {
 export interface AccountPrivateKeys {
   x25519PrivateKey: Uint8Array;
   ed25519PrivateKey: Uint8Array;
+}
+
+export interface OpaqueRegistrationStart {
+  request: string;
+  session: OpaqueRegistrationSession;
+}
+
+export interface OpaqueRegistrationResult {
+  record: string;
+  exportKey: Uint8Array;
+}
+
+export interface OpaqueLoginStart {
+  request: string;
+  session: OpaqueLoginSession;
+}
+
+export interface OpaqueLoginResult {
+  finish: string;
+  sessionKey: Uint8Array;
+  exportKey: Uint8Array;
+}
+
+export class OpaqueProtocolError extends Error {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = 'OpaqueProtocolError';
+  }
+}
+
+export class OpaqueRegistrationSession {
+  readonly client: OpaqueClient;
+
+  constructor(client: OpaqueClient) {
+    this.client = client;
+  }
+}
+
+export class OpaqueLoginSession {
+  readonly client: OpaqueClient;
+
+  constructor(client: OpaqueClient) {
+    this.client = client;
+  }
 }
 
 interface KeyWrapNonces {
@@ -62,6 +116,34 @@ function decode(value: string, fieldName: string): Uint8Array {
   } catch {
     throw new InvalidKeyMaterialError(`${fieldName} is not valid base64.`);
   }
+}
+
+function encodeOpaqueMessage(message: { serialize(): number[] }): string {
+  return encode(new Uint8Array(message.serialize()));
+}
+
+function decodeOpaqueMessage<T>(
+  value: string,
+  fieldName: string,
+  deserialize: (config: typeof OPAQUE_CONFIG, bytes: number[]) => T
+): T {
+  const bytes = decode(value, fieldName);
+  try {
+    return deserialize(OPAQUE_CONFIG, Array.from(bytes));
+  } catch (error) {
+    throw new OpaqueProtocolError(`${fieldName} is not a valid OPAQUE message.`, {
+      cause: error,
+    });
+  } finally {
+    sodium.memzero(bytes);
+  }
+}
+
+function throwOpaqueError(operation: string, result: unknown): never {
+  if (result instanceof Error) {
+    throw new OpaqueProtocolError(`${operation} failed: ${result.message}`, { cause: result });
+  }
+  throw new OpaqueProtocolError(`${operation} returned an invalid result.`);
 }
 
 function parseNonces(value: string): { x25519: Uint8Array; ed25519: Uint8Array } {
@@ -278,4 +360,121 @@ export async function decryptAccountKeys(
 export function clearPrivateKeys(privateKeys: AccountPrivateKeys): void {
   sodium.memzero(privateKeys.x25519PrivateKey);
   sodium.memzero(privateKeys.ed25519PrivateKey);
+}
+
+/**
+ * Starts OPAQUE registration. Send `request` to the server and retain
+ * `session` until `finishOpaqueRegistration` is called with the response.
+ */
+export async function startOpaqueRegistration(password: string): Promise<OpaqueRegistrationStart> {
+  await sodium.ready;
+  requireNonEmptyPassword(password);
+
+  const client = new OpaqueClient(OPAQUE_CONFIG);
+  const request = await client.registerInit(password);
+  if (!(request instanceof RegistrationRequest)) {
+    throwOpaqueError('OPAQUE registration initialization', request);
+  }
+
+  return {
+    request: encodeOpaqueMessage(request),
+    session: new OpaqueRegistrationSession(client),
+  };
+}
+
+/**
+ * Completes OPAQUE registration and returns the opaque record to store on the
+ * server. The record contains verifier material, not the user's password.
+ */
+export async function finishOpaqueRegistration(
+  session: OpaqueRegistrationSession,
+  response: string,
+  serverIdentity?: string,
+  clientIdentity?: string
+): Promise<OpaqueRegistrationResult> {
+  await sodium.ready;
+  const registrationResponse = decodeOpaqueMessage(
+    response,
+    'OPAQUE registration response',
+    (config, bytes) => RegistrationResponse.deserialize(config, bytes)
+  );
+  const result = await session.client.registerFinish(
+    registrationResponse,
+    serverIdentity,
+    clientIdentity
+  );
+  if (result instanceof Error) {
+    throwOpaqueError('OPAQUE registration finalization', result);
+  }
+
+  return {
+    record: encodeOpaqueMessage(result.record),
+    exportKey: new Uint8Array(result.export_key),
+  };
+}
+
+/**
+ * Starts OPAQUE login. Send `request` to the server and retain `session`
+ * until `finishOpaqueLogin` is called with the server response.
+ */
+export async function startOpaqueLogin(password: string): Promise<OpaqueLoginStart> {
+  await sodium.ready;
+  requireNonEmptyPassword(password);
+
+  const client = new OpaqueClient(OPAQUE_CONFIG);
+  const request = await client.authInit(password);
+  if (!(request instanceof KE1)) {
+    throwOpaqueError('OPAQUE login initialization', request);
+  }
+
+  return {
+    request: encodeOpaqueMessage(request),
+    session: new OpaqueLoginSession(client),
+  };
+}
+
+/**
+ * Completes OPAQUE login. The returned `finish` message must be sent to the
+ * server before accepting the authenticated session.
+ */
+export async function finishOpaqueLogin(
+  session: OpaqueLoginSession,
+  response: string,
+  serverIdentity?: string,
+  clientIdentity?: string,
+  context?: string
+): Promise<OpaqueLoginResult> {
+  await sodium.ready;
+  const keyExchangeResponse = decodeOpaqueMessage(
+    response,
+    'OPAQUE login response',
+    (config, bytes) => KE2.deserialize(config, bytes)
+  );
+  const result = await session.client.authFinish(
+    keyExchangeResponse,
+    serverIdentity,
+    clientIdentity,
+    context
+  );
+  if (result instanceof Error) {
+    throwOpaqueError('OPAQUE login finalization', result);
+  }
+
+  return {
+    finish: encodeOpaqueMessage(result.ke3),
+    sessionKey: new Uint8Array(result.session_key),
+    exportKey: new Uint8Array(result.export_key),
+  };
+}
+
+export function clearOpaqueSecrets(secrets: {
+  sessionKey?: Uint8Array;
+  exportKey?: Uint8Array;
+}): void {
+  if (secrets.sessionKey !== undefined) {
+    sodium.memzero(secrets.sessionKey);
+  }
+  if (secrets.exportKey !== undefined) {
+    sodium.memzero(secrets.exportKey);
+  }
 }

@@ -6,6 +6,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
 )
 
@@ -34,4 +35,44 @@ func main() {
 
 	log.Print("connected to database and initialized schema")
 
+	auth, err := newAuthHandler(db)
+	if err != nil {
+		log.Fatal("OPAQUE initialization failed: ", err)
+	}
+
+	router := gin.New()
+	router.Use(gin.Logger(), gin.Recovery())
+	router.Use(corsMiddleware())
+	router.POST("/api/auth/register/start", auth.registerStart)
+	router.POST("/api/auth/register/finish", auth.registerFinish)
+
+	addr := os.Getenv("HTTP_ADDR")
+	if addr == "" {
+		addr = ":8080"
+	}
+
+	log.Printf("HTTP server listening on %s", addr)
+	if err := router.Run(addr); err != nil {
+		log.Fatal("HTTP server failed: ", err)
+	}
+
+}
+
+func corsMiddleware() gin.HandlerFunc {
+	allowedOrigin := os.Getenv("CLIENT_ORIGIN")
+	if allowedOrigin == "" {
+		allowedOrigin = "http://localhost:5173"
+	}
+
+	return func(c *gin.Context) {
+		c.Header("Access-Control-Allow-Origin", allowedOrigin)
+		c.Header("Vary", "Origin")
+		c.Header("Access-Control-Allow-Headers", "Content-Type")
+		c.Header("Access-Control-Allow-Methods", "POST, OPTIONS")
+		if c.Request.Method == "OPTIONS" {
+			c.AbortWithStatus(204)
+			return
+		}
+		c.Next()
+	}
 }
