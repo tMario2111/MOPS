@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import type { FormEvent } from 'react';
+import { Link } from 'react-router';
 
 import {
   clearOpaqueSecrets,
@@ -175,6 +176,13 @@ export default function Home() {
         >
           {isSubmitting ? 'Creating account...' : 'Create account'}
         </button>
+
+        <p className="text-center text-sm text-slate-600">
+          Already have an account?{' '}
+          <Link className="font-medium text-slate-900 underline" to="/login">
+            Log in
+          </Link>
+        </p>
       </form>
     </main>
   );

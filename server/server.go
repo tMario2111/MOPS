@@ -35,7 +35,13 @@ func main() {
 
 	log.Print("connected to database and initialized schema")
 
-	auth, err := newAuthHandler(db)
+	state, err := openBadgerStore()
+	if err != nil {
+		log.Fatal("Badger initialization failed: ", err)
+	}
+	defer state.close()
+
+	auth, err := newAuthHandler(db, state)
 	if err != nil {
 		log.Fatal("OPAQUE initialization failed: ", err)
 	}
@@ -45,6 +51,14 @@ func main() {
 	router.Use(corsMiddleware())
 	router.POST("/api/auth/register/start", auth.registerStart)
 	router.POST("/api/auth/register/finish", auth.registerFinish)
+	router.POST("/api/auth/login/start", auth.loginStart)
+	router.POST("/api/auth/login/finish", auth.loginFinish)
+
+	protected := router.Group("/api")
+	protected.Use(requireSession(state))
+	protected.GET("/auth/me", auth.currentUser)
+	protected.POST("/auth/logout", auth.logout)
+	protected.POST("/auth/logout-all", auth.logoutAll)
 
 	addr := os.Getenv("HTTP_ADDR")
 	if addr == "" {
@@ -69,6 +83,7 @@ func corsMiddleware() gin.HandlerFunc {
 		c.Header("Vary", "Origin")
 		c.Header("Access-Control-Allow-Headers", "Content-Type")
 		c.Header("Access-Control-Allow-Methods", "POST, OPTIONS")
+		c.Header("Access-Control-Allow-Credentials", "true")
 		if c.Request.Method == "OPTIONS" {
 			c.AbortWithStatus(204)
 			return

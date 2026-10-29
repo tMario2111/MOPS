@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"os"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/bytemare/ksf"
@@ -20,7 +19,6 @@ import (
 )
 
 const (
-	registrationTTL  = 10 * time.Minute
 	maxOpaqueMessage = 16 * 1024
 	maxKeyMaterial   = 64 * 1024
 )
@@ -48,57 +46,13 @@ type registrationFinishRequest struct {
 	KeyWrapParams            map[string]any `json:"key_wrap_params"`
 }
 
-type pendingRegistration struct {
-	username string
-	email    string
-	created  time.Time
-}
-
-type registrationStore struct {
-	mu      sync.Mutex
-	pending map[uuid.UUID]pendingRegistration
-}
-
-func newRegistrationStore() *registrationStore {
-	return &registrationStore{pending: make(map[uuid.UUID]pendingRegistration)}
-}
-
-func (s *registrationStore) add(reg pendingRegistration) uuid.UUID {
-	id := uuid.New()
-	s.mu.Lock()
-	s.pending[id] = reg
-	s.mu.Unlock()
-	return id
-}
-
-func (s *registrationStore) get(id uuid.UUID) (pendingRegistration, bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	reg, ok := s.pending[id]
-	if !ok {
-		return pendingRegistration{}, false
-	}
-	if time.Since(reg.created) > registrationTTL {
-		delete(s.pending, id)
-		return pendingRegistration{}, false
-	}
-	return reg, true
-}
-
-func (s *registrationStore) remove(id uuid.UUID) {
-	s.mu.Lock()
-	delete(s.pending, id)
-	s.mu.Unlock()
-}
-
 type authHandler struct {
-	db            *bun.DB
-	opaqueServer  *opaque.Server
-	registrations *registrationStore
+	db           *bun.DB
+	opaqueServer *opaque.Server
+	state        *badgerStore
 }
 
-func newAuthHandler(db *bun.DB) (*authHandler, error) {
+func newAuthHandler(db *bun.DB, state *badgerStore) (*authHandler, error) {
 	config := &opaque.Configuration{
 		OPRF: opaque.P256Sha256,
 		AKE:  opaque.P256Sha256,
@@ -129,9 +83,9 @@ func newAuthHandler(db *bun.DB) (*authHandler, error) {
 	}
 
 	return &authHandler{
-		db:            db,
-		opaqueServer:  server,
-		registrations: newRegistrationStore(),
+		db:           db,
+		opaqueServer: server,
+		state:        state,
 	}, nil
 }
 
@@ -166,11 +120,15 @@ func (h *authHandler) registerStart(c *gin.Context) {
 		return
 	}
 
-	id := h.registrations.add(pendingRegistration{
-		username: request.Username,
-		email:    request.Email,
-		created:  time.Now(),
-	})
+	id := uuid.New()
+	if err := h.state.putRegistration(id, pendingRegistrationState{
+		Username: request.Username,
+		Email:    request.Email,
+		Created:  time.Now().UTC(),
+	}); err != nil {
+		respondError(c, http.StatusInternalServerError, "could not store registration state")
+		return
+	}
 	c.JSON(http.StatusOK, registrationStartResponse{
 		RegistrationID: id.String(),
 		OpaqueResponse: encodeMessage(response.Serialize()),
@@ -189,9 +147,13 @@ func (h *authHandler) registerFinish(c *gin.Context) {
 		respondError(c, http.StatusBadRequest, "invalid registration_id")
 		return
 	}
-	pending, ok := h.registrations.get(registrationID)
-	if !ok {
+	pending, err := h.state.getRegistration(registrationID)
+	if badgerStateError(err) {
 		respondError(c, http.StatusBadRequest, "registration is missing or expired")
+		return
+	}
+	if err != nil {
+		respondError(c, http.StatusInternalServerError, "could not load registration state")
 		return
 	}
 	if err := validateKeyMaterial(request); err != nil {
@@ -212,7 +174,7 @@ func (h *authHandler) registerFinish(c *gin.Context) {
 
 	ctx := c.Request.Context()
 	exists, err := h.db.NewSelect().Model((*User)(nil)).
-		Where("username = ?", pending.username).
+		Where("username = ?", pending.Username).
 		Exists(ctx)
 	if err != nil {
 		respondError(c, http.StatusInternalServerError, "could not check username availability")
@@ -223,7 +185,7 @@ func (h *authHandler) registerFinish(c *gin.Context) {
 		return
 	}
 	exists, err = h.db.NewSelect().Model((*User)(nil)).
-		Where("email = ?", pending.email).
+		Where("email = ?", pending.Email).
 		Exists(ctx)
 	if err != nil {
 		respondError(c, http.StatusInternalServerError, "could not check email availability")
@@ -236,8 +198,8 @@ func (h *authHandler) registerFinish(c *gin.Context) {
 
 	user := &User{
 		ID:                       uuid.New(),
-		Username:                 pending.username,
-		Email:                    pending.email,
+		Username:                 pending.Username,
+		Email:                    pending.Email,
 		PublicKey:                request.PublicKey,
 		SigningPublicKey:         request.SigningPublicKey,
 		OpaqueRecord:             encodeMessage(record.Serialize()),
@@ -252,9 +214,184 @@ func (h *authHandler) registerFinish(c *gin.Context) {
 		respondError(c, http.StatusInternalServerError, "could not create account")
 		return
 	}
-	h.registrations.remove(registrationID)
+	if err := h.state.deleteRegistration(registrationID); err != nil {
+		respondError(c, http.StatusInternalServerError, "account created but registration state cleanup failed")
+		return
+	}
 
 	c.JSON(http.StatusCreated, gin.H{"id": user.ID.String(), "username": user.Username})
+}
+
+type loginStartRequest struct {
+	Username      string `json:"username"`
+	OpaqueRequest string `json:"opaque_request"`
+}
+
+type loginStartResponse struct {
+	LoginID        string `json:"login_id"`
+	OpaqueResponse string `json:"opaque_response"`
+}
+
+type loginFinishRequest struct {
+	LoginID      string `json:"login_id"`
+	OpaqueFinish string `json:"opaque_finish"`
+}
+
+func (h *authHandler) loginStart(c *gin.Context) {
+	var request loginStartRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		respondError(c, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	request.Username = strings.TrimSpace(request.Username)
+	if request.Username == "" {
+		respondError(c, http.StatusBadRequest, "username is required")
+		return
+	}
+
+	var user User
+	if err := h.db.NewSelect().Model(&user).
+		Where("username = ?", request.Username).
+		Where("deleted_at IS NULL").
+		Scan(c.Request.Context()); err != nil {
+		respondError(c, http.StatusUnauthorized, "invalid credentials")
+		return
+	}
+
+	requestBytes, err := decodeMessage(request.OpaqueRequest, maxOpaqueMessage)
+	if err != nil {
+		respondError(c, http.StatusBadRequest, "invalid opaque_request")
+		return
+	}
+	ke1, err := h.opaqueServer.Deserialize.KE1(requestBytes)
+	if err != nil {
+		respondError(c, http.StatusBadRequest, "invalid OPAQUE login request")
+		return
+	}
+	recordBytes, err := decodeMessage(user.OpaqueRecord, maxOpaqueMessage)
+	if err != nil {
+		respondError(c, http.StatusInternalServerError, "stored OPAQUE record is invalid")
+		return
+	}
+	record, err := h.opaqueServer.Deserialize.RegistrationRecord(recordBytes)
+	if err != nil {
+		respondError(c, http.StatusInternalServerError, "stored OPAQUE record is invalid")
+		return
+	}
+
+	ke2, output, err := h.opaqueServer.GenerateKE2(ke1, &opaque.ClientRecord{
+		RegistrationRecord:   record,
+		CredentialIdentifier: []byte(user.Username),
+	})
+	if err != nil {
+		respondError(c, http.StatusBadRequest, "could not process OPAQUE login request")
+		return
+	}
+
+	id := uuid.New()
+	if err := h.state.putLogin(id, pendingLoginState{
+		UserID:            user.ID,
+		ExpectedClientMAC: encodeMessage(output.ClientMAC),
+		Created:           time.Now().UTC(),
+	}); err != nil {
+		respondError(c, http.StatusInternalServerError, "could not store login state")
+		return
+	}
+	c.JSON(http.StatusOK, loginStartResponse{
+		LoginID:        id.String(),
+		OpaqueResponse: encodeMessage(ke2.Serialize()),
+	})
+}
+
+func (h *authHandler) loginFinish(c *gin.Context) {
+	var request loginFinishRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		respondError(c, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	loginID, err := uuid.Parse(request.LoginID)
+	if err != nil {
+		respondError(c, http.StatusBadRequest, "invalid login_id")
+		return
+	}
+	state, err := h.state.getLogin(loginID)
+	if badgerStateError(err) {
+		respondError(c, http.StatusUnauthorized, "login is missing or expired")
+		return
+	}
+	if err != nil {
+		respondError(c, http.StatusInternalServerError, "could not load login state")
+		return
+	}
+	finishBytes, err := decodeMessage(request.OpaqueFinish, maxOpaqueMessage)
+	if err != nil {
+		respondError(c, http.StatusBadRequest, "invalid opaque_finish")
+		return
+	}
+	ke3, err := h.opaqueServer.Deserialize.KE3(finishBytes)
+	if err != nil {
+		respondError(c, http.StatusBadRequest, "invalid OPAQUE login finish")
+		return
+	}
+	expectedMAC, err := decodeMessage(state.ExpectedClientMAC, maxOpaqueMessage)
+	if err != nil {
+		respondError(c, http.StatusInternalServerError, "stored login state is invalid")
+		return
+	}
+	if err := h.opaqueServer.LoginFinish(ke3, expectedMAC); err != nil {
+		_ = h.state.deleteLogin(loginID)
+		respondError(c, http.StatusUnauthorized, "invalid credentials")
+		return
+	}
+
+	rawToken, session, err := newSession(h.state, state.UserID)
+	if err != nil {
+		respondError(c, http.StatusInternalServerError, "could not create session")
+		return
+	}
+	if err := h.state.deleteLogin(loginID); err != nil {
+		_ = h.state.revokeSession(rawToken)
+		respondError(c, http.StatusInternalServerError, "could not finalize login")
+		return
+	}
+	setSessionCookie(c, rawToken, session.ExpiresAt)
+	c.JSON(http.StatusOK, gin.H{"user_id": session.UserID.String()})
+}
+
+func (h *authHandler) logout(c *gin.Context) {
+	rawToken, err := c.Cookie(sessionCookieName)
+	if err == nil && rawToken != "" {
+		if err := h.state.revokeSession(rawToken); err != nil {
+			respondError(c, http.StatusInternalServerError, "could not revoke session")
+			return
+		}
+	}
+	clearSessionCookie(c)
+	c.Status(http.StatusNoContent)
+}
+
+func (h *authHandler) logoutAll(c *gin.Context) {
+	userID := c.MustGet("user_id").(uuid.UUID)
+	if err := h.state.revokeUserSessions(userID); err != nil {
+		respondError(c, http.StatusInternalServerError, "could not revoke sessions")
+		return
+	}
+	clearSessionCookie(c)
+	c.Status(http.StatusNoContent)
+}
+
+func (h *authHandler) currentUser(c *gin.Context) {
+	userID := c.MustGet("user_id").(uuid.UUID)
+	var user User
+	if err := h.db.NewSelect().Model(&user).Where("id = ?", userID).Scan(c.Request.Context()); err != nil {
+		respondError(c, http.StatusNotFound, "user not found")
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"id":       user.ID.String(),
+		"username": user.Username,
+		"email":    user.Email,
+	})
 }
 
 func validateRegistrationIdentity(username, email string) error {
