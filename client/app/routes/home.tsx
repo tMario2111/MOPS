@@ -37,7 +37,9 @@ export default function Home() {
         : 'http://localhost:8080';
 
     try {
-      const opaque = await startOpaqueRegistration(password);
+      const opaque = await runRegistrationStep('Could not initialize OPAQUE registration.', () =>
+        startOpaqueRegistration(password)
+      );
       const startResponse = await fetch(`${apiBaseUrl}/api/auth/register/start`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -56,10 +58,18 @@ export default function Home() {
         registration_id: string;
         opaque_response: string;
       };
-      const wrappedKeys = await generateAccountKeys(password);
-      const opaqueResult = await finishOpaqueRegistration(
-        opaque.session,
-        startResult.opaque_response
+      if (
+        typeof startResult.registration_id !== 'string' ||
+        typeof startResult.opaque_response !== 'string'
+      ) {
+        throw new Error('The server returned an invalid OPAQUE registration response.');
+      }
+
+      const wrappedKeys = await runRegistrationStep('Could not generate account keys.', () =>
+        generateAccountKeys(password)
+      );
+      const opaqueResult = await runRegistrationStep('Could not finish OPAQUE registration.', () =>
+        finishOpaqueRegistration(opaque.session, startResult.opaque_response)
       );
 
       try {
@@ -168,6 +178,17 @@ export default function Home() {
       </form>
     </main>
   );
+}
+
+async function runRegistrationStep<T>(message: string, operation: () => Promise<T>): Promise<T> {
+  try {
+    return await operation();
+  } catch (error) {
+    if (error instanceof Error && error.message !== '') {
+      throw new Error(`${message} ${error.message}`, { cause: error });
+    }
+    throw new Error(message, { cause: error });
+  }
 }
 
 function getFormValue(formData: FormData, name: string): string {

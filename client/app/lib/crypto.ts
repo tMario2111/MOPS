@@ -9,9 +9,10 @@ import {
   RegistrationResponse,
 } from '@cloudflare/opaque-ts';
 
-const NONCE_BYTES = sodium.crypto_aead_xchacha20poly1305_ietf_NPUBBYTES;
-const PASSWORD_KEY_BYTES = sodium.crypto_aead_xchacha20poly1305_ietf_KEYBYTES;
-const BASE64_VARIANT = sodium.base64_variants.URLSAFE_NO_PADDING;
+const NONCE_BYTES = 24;
+const PASSWORD_KEY_BYTES = 32;
+const PASSWORD_SALT_BYTES = 16;
+const BASE64_VARIANT = 7;
 
 const X25519_AAD = 'mops/account/x25519-private-key/v1';
 const ED25519_AAD = 'mops/account/ed25519-private-key/v1';
@@ -127,6 +128,10 @@ function decodeOpaqueMessage<T>(
   fieldName: string,
   deserialize: (config: typeof OPAQUE_CONFIG, bytes: number[]) => T
 ): T {
+  if (typeof value !== 'string' || value.length === 0) {
+    throw new OpaqueProtocolError(`${fieldName} is missing from the server response.`);
+  }
+
   const bytes = decode(value, fieldName);
   try {
     return deserialize(OPAQUE_CONFIG, Array.from(bytes));
@@ -314,7 +319,7 @@ export async function decryptAccountKeys(
   validateParams(wrappedKeys.keyWrapParams);
 
   const salt = decode(wrappedKeys.keyWrapSalt, 'keyWrapSalt');
-  if (salt.length !== sodium.crypto_pwhash_SALTBYTES) {
+  if (salt.length !== PASSWORD_SALT_BYTES) {
     throw new InvalidKeyMaterialError('keyWrapSalt has an invalid length.');
   }
   const nonces = parseNonces(wrappedKeys.keyWrapNonce);
