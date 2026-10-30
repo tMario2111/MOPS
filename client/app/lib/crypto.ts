@@ -1,23 +1,14 @@
 import sodium from 'libsodium-wrappers-sumo';
-import {
-  getOpaqueConfig,
-  OpaqueClient,
-  OpaqueID,
-  KE1,
-  KE2,
-  RegistrationRequest,
-  RegistrationResponse,
-} from '@cloudflare/opaque-ts';
+import * as opaque from '@serenity-kit/opaque-p256';
 
 const NONCE_BYTES = 24;
 const PASSWORD_KEY_BYTES = 32;
 const PASSWORD_SALT_BYTES = 16;
 const BASE64_VARIANT = 7;
 
+// TODO: Replace `mops` with app name (`Still.`)
 const X25519_AAD = 'mops/account/x25519-private-key/v1';
 const ED25519_AAD = 'mops/account/ed25519-private-key/v1';
-const OPAQUE_CONFIG = getOpaqueConfig(OpaqueID.OPAQUE_P256);
-
 export interface KeyWrapParams {
   algorithm: 'argon2id13';
   opsLimit: number;
@@ -70,18 +61,22 @@ export class OpaqueProtocolError extends Error {
 }
 
 export class OpaqueRegistrationSession {
-  readonly client: OpaqueClient;
+  readonly state: string;
+  readonly password: string;
 
-  constructor(client: OpaqueClient) {
-    this.client = client;
+  constructor(state: string, password: string) {
+    this.state = state;
+    this.password = password;
   }
 }
 
 export class OpaqueLoginSession {
-  readonly client: OpaqueClient;
+  readonly state: string;
+  readonly password: string;
 
-  constructor(client: OpaqueClient) {
-    this.client = client;
+  constructor(state: string, password: string) {
+    this.state = state;
+    this.password = password;
   }
 }
 
@@ -117,38 +112,6 @@ function decode(value: string, fieldName: string): Uint8Array {
   } catch {
     throw new InvalidKeyMaterialError(`${fieldName} is not valid base64.`);
   }
-}
-
-function encodeOpaqueMessage(message: { serialize(): number[] }): string {
-  return encode(new Uint8Array(message.serialize()));
-}
-
-function decodeOpaqueMessage<T>(
-  value: string,
-  fieldName: string,
-  deserialize: (config: typeof OPAQUE_CONFIG, bytes: number[]) => T
-): T {
-  if (typeof value !== 'string' || value.length === 0) {
-    throw new OpaqueProtocolError(`${fieldName} is missing from the server response.`);
-  }
-
-  const bytes = decode(value, fieldName);
-  try {
-    return deserialize(OPAQUE_CONFIG, Array.from(bytes));
-  } catch (error) {
-    throw new OpaqueProtocolError(`${fieldName} is not a valid OPAQUE message.`, {
-      cause: error,
-    });
-  } finally {
-    sodium.memzero(bytes);
-  }
-}
-
-function throwOpaqueError(operation: string, result: unknown): never {
-  if (result instanceof Error) {
-    throw new OpaqueProtocolError(`${operation} failed: ${result.message}`, { cause: result });
-  }
-  throw new OpaqueProtocolError(`${operation} returned an invalid result.`);
 }
 
 function parseNonces(value: string): { x25519: Uint8Array; ed25519: Uint8Array } {
@@ -372,19 +335,18 @@ export function clearPrivateKeys(privateKeys: AccountPrivateKeys): void {
  * `session` until `finishOpaqueRegistration` is called with the response.
  */
 export async function startOpaqueRegistration(password: string): Promise<OpaqueRegistrationStart> {
-  await sodium.ready;
+  await opaque.ready;
   requireNonEmptyPassword(password);
 
-  const client = new OpaqueClient(OPAQUE_CONFIG);
-  const request = await client.registerInit(password);
-  if (!(request instanceof RegistrationRequest)) {
-    throwOpaqueError('OPAQUE registration initialization', request);
+  try {
+    const result = opaque.client.startRegistration({ password });
+    return {
+      request: result.registrationRequest,
+      session: new OpaqueRegistrationSession(result.clientRegistrationState, password),
+    };
+  } catch (error) {
+    throw new OpaqueProtocolError('OPAQUE registration initialization failed.', { cause: error });
   }
-
-  return {
-    request: encodeOpaqueMessage(request),
-    session: new OpaqueRegistrationSession(client),
-  };
 }
 
 /**
@@ -397,25 +359,24 @@ export async function finishOpaqueRegistration(
   serverIdentity?: string,
   clientIdentity?: string
 ): Promise<OpaqueRegistrationResult> {
-  await sodium.ready;
-  const registrationResponse = decodeOpaqueMessage(
-    response,
-    'OPAQUE registration response',
-    (config, bytes) => RegistrationResponse.deserialize(config, bytes)
-  );
-  const result = await session.client.registerFinish(
-    registrationResponse,
-    serverIdentity,
-    clientIdentity
-  );
-  if (result instanceof Error) {
-    throwOpaqueError('OPAQUE registration finalization', result);
+  await opaque.ready;
+  try {
+    const result = opaque.client.finishRegistration({
+      clientRegistrationState: session.state,
+      registrationResponse: response,
+      password: session.password,
+      identifiers:
+        serverIdentity !== undefined || clientIdentity !== undefined
+          ? { server: serverIdentity, client: clientIdentity }
+          : undefined,
+    });
+    return {
+      record: result.registrationRecord,
+      exportKey: decodeOpaqueSecret(result.exportKey, 'OPAQUE registration export key'),
+    };
+  } catch (error) {
+    throw new OpaqueProtocolError('OPAQUE registration finalization failed.', { cause: error });
   }
-
-  return {
-    record: encodeOpaqueMessage(result.record),
-    exportKey: new Uint8Array(result.export_key),
-  };
 }
 
 /**
@@ -423,19 +384,18 @@ export async function finishOpaqueRegistration(
  * until `finishOpaqueLogin` is called with the server response.
  */
 export async function startOpaqueLogin(password: string): Promise<OpaqueLoginStart> {
-  await sodium.ready;
+  await opaque.ready;
   requireNonEmptyPassword(password);
 
-  const client = new OpaqueClient(OPAQUE_CONFIG);
-  const request = await client.authInit(password);
-  if (!(request instanceof KE1)) {
-    throwOpaqueError('OPAQUE login initialization', request);
+  try {
+    const result = opaque.client.startLogin({ password });
+    return {
+      request: result.startLoginRequest,
+      session: new OpaqueLoginSession(result.clientLoginState, password),
+    };
+  } catch (error) {
+    throw new OpaqueProtocolError('OPAQUE login initialization failed.', { cause: error });
   }
-
-  return {
-    request: encodeOpaqueMessage(request),
-    session: new OpaqueLoginSession(client),
-  };
 }
 
 /**
@@ -449,27 +409,41 @@ export async function finishOpaqueLogin(
   clientIdentity?: string,
   context?: string
 ): Promise<OpaqueLoginResult> {
-  await sodium.ready;
-  const keyExchangeResponse = decodeOpaqueMessage(
-    response,
-    'OPAQUE login response',
-    (config, bytes) => KE2.deserialize(config, bytes)
-  );
-  const result = await session.client.authFinish(
-    keyExchangeResponse,
-    serverIdentity,
-    clientIdentity,
-    context
-  );
-  if (result instanceof Error) {
-    throwOpaqueError('OPAQUE login finalization', result);
+  await opaque.ready;
+  void context;
+  try {
+    const result = opaque.client.finishLogin({
+      clientLoginState: session.state,
+      loginResponse: response,
+      password: session.password,
+      identifiers:
+        serverIdentity !== undefined || clientIdentity !== undefined
+          ? { server: serverIdentity, client: clientIdentity }
+          : undefined,
+    });
+    if (result === undefined) {
+      throw new Error('the server response was rejected');
+    }
+    return {
+      finish: result.finishLoginRequest,
+      sessionKey: decodeOpaqueSecret(result.sessionKey, 'OPAQUE session key'),
+      exportKey: decodeOpaqueSecret(result.exportKey, 'OPAQUE export key'),
+    };
+  } catch (error) {
+    throw new OpaqueProtocolError('OPAQUE login finalization failed.', { cause: error });
   }
+}
 
-  return {
-    finish: encodeOpaqueMessage(result.ke3),
-    sessionKey: new Uint8Array(result.session_key),
-    exportKey: new Uint8Array(result.export_key),
-  };
+function decodeOpaqueSecret(value: string, fieldName: string): Uint8Array {
+  try {
+    const decoded = sodium.from_base64(value, BASE64_VARIANT);
+    if (decoded.length === 0) {
+      throw new Error('empty value');
+    }
+    return decoded;
+  } catch (error) {
+    throw new OpaqueProtocolError(`${fieldName} is invalid.`, { cause: error });
+  }
 }
 
 export function clearOpaqueSecrets(secrets: {

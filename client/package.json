@@ -14,9 +14,9 @@
     "check": "npm run lint && npm run format:check && npm run typecheck"
   },
   "dependencies": {
-    "@cloudflare/opaque-ts": "^0.7.5",
     "@react-router/node": "^8.5.0",
     "@react-router/serve": "^8.5.0",
+    "@serenity-kit/opaque-p256": "^1.1.0",
     "isbot": "^5.1.36",
     "libsodium-wrappers-sumo": "^0.8.4",
     "react": "^19.2.8",

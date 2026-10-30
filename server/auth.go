@@ -56,7 +56,7 @@ func newAuthHandler(db *bun.DB, state *badgerStore) (*authHandler, error) {
 	config := &opaque.Configuration{
 		OPRF: opaque.P256Sha256,
 		AKE:  opaque.P256Sha256,
-		KSF:  ksf.Scrypt,
+		KSF:  ksf.Argon2id,
 		KDF:  crypto.SHA256,
 		MAC:  crypto.SHA256,
 		Hash: crypto.SHA256,
