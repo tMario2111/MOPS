@@ -1,7 +1,16 @@
 import { useState } from 'react';
 import type { FormEvent } from 'react';
-import { Link } from 'react-router';
+import { Link, useNavigate } from 'react-router';
 
+import {
+  AuthLayout,
+  CheckboxField,
+  FormAlert,
+  ShieldIcon,
+  SubmitButton,
+  TextField,
+} from '../components/auth-layout';
+import { ApiError, apiRequest, getFormValue } from '../lib/api';
 import {
   clearOpaqueSecrets,
   finishOpaqueRegistration,
@@ -16,69 +25,67 @@ export function meta() {
   ];
 }
 
+interface FormErrors {
+  username?: string;
+  email?: string;
+  password?: string;
+  confirmPassword?: string;
+  terms?: string;
+  form?: string;
+}
+
+interface RegistrationStartResult {
+  registration_id: string;
+  opaque_response: string;
+}
+
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
 export default function Home() {
+  const navigate = useNavigate();
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [createdUsername, setCreatedUsername] = useState<string | null>(null);
+  const [errors, setErrors] = useState<FormErrors>({});
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    setError(null);
-    setCreatedUsername(null);
-    setIsSubmitting(true);
 
     const formData = new FormData(event.currentTarget);
     const username = getFormValue(formData, 'username').trim();
     const email = getFormValue(formData, 'email').trim();
     const password = getFormValue(formData, 'password');
-    const configuredApiBaseUrl: unknown = import.meta.env.VITE_API_BASE_URL;
-    const apiBaseUrl =
-      typeof configuredApiBaseUrl === 'string' && configuredApiBaseUrl.length > 0
-        ? configuredApiBaseUrl
-        : 'http://localhost:8080';
+    const confirmPassword = getFormValue(formData, 'confirmPassword');
 
+    const acceptedTerms = formData.get('terms') !== null;
+
+    const validationErrors = validate({
+      username,
+      email,
+      password,
+      confirmPassword,
+      acceptedTerms,
+    });
+    setErrors(validationErrors);
+    if (Object.keys(validationErrors).length > 0) {
+      return;
+    }
+
+    setIsSubmitting(true);
     try {
-      const opaque = await runRegistrationStep('Could not initialize OPAQUE registration.', () =>
-        startOpaqueRegistration(password)
-      );
-      const startResponse = await fetch(`${apiBaseUrl}/api/auth/register/start`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          username,
-          email,
-          opaque_request: opaque.request,
-        }),
+      const opaque = await startOpaqueRegistration(password);
+      const start = await apiRequest<RegistrationStartResult>('/api/auth/register/start', {
+        body: { username, email, opaque_request: opaque.request },
       });
-
-      if (!startResponse.ok) {
-        throw new Error(await readApiError(startResponse, 'Could not start registration.'));
+      if (typeof start.registration_id !== 'string' || typeof start.opaque_response !== 'string') {
+        throw new Error('The server returned an invalid registration response.');
       }
 
-      const startResult = (await startResponse.json()) as unknown as {
-        registration_id: string;
-        opaque_response: string;
-      };
-      if (
-        typeof startResult.registration_id !== 'string' ||
-        typeof startResult.opaque_response !== 'string'
-      ) {
-        throw new Error('The server returned an invalid OPAQUE registration response.');
-      }
-
-      const wrappedKeys = await runRegistrationStep('Could not generate account keys.', () =>
-        generateAccountKeys(password)
-      );
-      const opaqueResult = await runRegistrationStep('Could not finish OPAQUE registration.', () =>
-        finishOpaqueRegistration(opaque.session, startResult.opaque_response)
-      );
+      const wrappedKeys = await generateAccountKeys(password);
+      const opaqueResult = await finishOpaqueRegistration(opaque.session, start.opaque_response);
 
       try {
-        const finishResponse = await fetch(`${apiBaseUrl}/api/auth/register/finish`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            registration_id: startResult.registration_id,
+        await apiRequest('/api/auth/register/finish', {
+          body: {
+            registration_id: start.registration_id,
             opaque_record: opaqueResult.record,
             public_key: wrappedKeys.publicX25519Key,
             signing_public_key: wrappedKeys.publicEd25519Key,
@@ -87,128 +94,147 @@ export default function Home() {
             key_wrap_nonce: wrappedKeys.keyWrapNonce,
             key_wrap_salt: wrappedKeys.keyWrapSalt,
             key_wrap_params: wrappedKeys.keyWrapParams,
-          }),
+          },
         });
-
-        if (!finishResponse.ok) {
-          throw new Error(await readApiError(finishResponse, 'Could not create account.'));
-        }
       } finally {
         clearOpaqueSecrets(opaqueResult);
       }
 
-      setCreatedUsername(username);
-      event.currentTarget.reset();
-    } catch (submissionError) {
-      setError(
-        submissionError instanceof Error
-          ? submissionError.message
-          : 'Registration failed. Please try again.'
-      );
+      void navigate('/login', { state: { registeredUsername: username } });
+    } catch (error) {
+      setErrors(toFormErrors(error));
     } finally {
       setIsSubmitting(false);
     }
   }
 
   return (
-    <main className="flex min-h-screen items-center justify-center bg-slate-50 px-6 py-12 text-slate-900">
+    <AuthLayout
+      icon={<ShieldIcon className="size-5" />}
+      title="Create your account"
+      subtitle="Your private space starts here."
+      footerNote="No ads. No tracking. Just your conversations."
+      dense
+    >
       <form
-        className="w-full max-w-sm space-y-6 rounded-xl border border-slate-200 bg-white p-8 shadow-sm"
+        className="space-y-4"
+        noValidate
         onSubmit={(event) => {
           void handleSubmit(event);
         }}
       >
-        <h1 className="text-2xl font-semibold tracking-tight">Chat App</h1>
+        <TextField
+          id="username"
+          label="Username"
+          type="text"
+          autoComplete="username"
+          placeholder="Choose a username"
+          hint="How friends will find you. No phone number needed."
+          error={errors.username}
+        />
 
-        <div className="space-y-4">
-          <label className="block text-sm font-medium text-slate-700">
-            Username
-            <input
-              className="mt-2 block w-full rounded-md border border-slate-300 px-3 py-2 text-base font-normal outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
-              name="username"
-              type="text"
-              autoComplete="username"
-              minLength={3}
-              maxLength={64}
-              required
-            />
-          </label>
+        <TextField
+          id="email"
+          label="Email"
+          type="email"
+          autoComplete="email"
+          placeholder="Enter your email address"
+          error={errors.email}
+        />
 
-          <label className="block text-sm font-medium text-slate-700">
-            Email
-            <input
-              className="mt-2 block w-full rounded-md border border-slate-300 px-3 py-2 text-base font-normal outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
-              name="email"
-              type="email"
-              autoComplete="email"
-              required
-            />
-          </label>
+        <TextField
+          id="password"
+          label="Password"
+          type="password"
+          autoComplete="new-password"
+          placeholder="Create a strong password"
+          hint="Use at least 12 characters for a stronger password."
+          error={errors.password}
+          trailingLock
+        />
 
-          <label className="block text-sm font-medium text-slate-700">
-            Password
-            <input
-              className="mt-2 block w-full rounded-md border border-slate-300 px-3 py-2 text-base font-normal outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
-              name="password"
-              type="password"
-              autoComplete="new-password"
-              required
-            />
-          </label>
+        <TextField
+          id="confirmPassword"
+          label="Confirm password"
+          type="password"
+          autoComplete="new-password"
+          placeholder="Enter your password again"
+          error={errors.confirmPassword}
+          trailingLock
+        />
+
+        <div className="sm:pt-1">
+          <CheckboxField id="terms" defaultChecked error={errors.terms}>
+            I agree to the <span className="font-medium text-accent">Terms of Service</span> and{' '}
+            <span className="font-medium text-accent">Privacy Policy</span>.
+          </CheckboxField>
         </div>
 
-        {error && (
-          <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700" role="alert">
-            {error}
-          </p>
-        )}
+        {errors.form && <FormAlert>{errors.form}</FormAlert>}
 
-        {createdUsername && (
-          <p className="rounded-md bg-green-50 px-3 py-2 text-sm text-green-700" role="status">
-            Account created for {createdUsername}.
-          </p>
-        )}
+        <SubmitButton
+          pending={isSubmitting}
+          idleLabel="Create account"
+          pendingLabel="Creating account..."
+        />
 
-        <button
-          className="w-full rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
-          type="submit"
-          disabled={isSubmitting}
-        >
-          {isSubmitting ? 'Creating account...' : 'Create account'}
-        </button>
-
-        <p className="text-center text-sm text-slate-600">
+        <p className="text-center text-[13px] text-muted">
           Already have an account?{' '}
-          <Link className="font-medium text-slate-900 underline" to="/login">
-            Log in
+          <Link className="font-medium text-accent hover:underline" to="/login">
+            Sign in
           </Link>
         </p>
       </form>
-    </main>
+    </AuthLayout>
   );
 }
 
-async function runRegistrationStep<T>(message: string, operation: () => Promise<T>): Promise<T> {
-  try {
-    return await operation();
-  } catch (error) {
-    if (error instanceof Error && error.message !== '') {
-      throw new Error(`${message} ${error.message}`, { cause: error });
+function validate(values: {
+  username: string;
+  email: string;
+  password: string;
+  confirmPassword: string;
+  acceptedTerms: boolean;
+}): FormErrors {
+  const errors: FormErrors = {};
+  if (values.username.length < 3 || values.username.length > 64) {
+    errors.username = 'Username must be between 3 and 64 characters.';
+  } else if (/\s/.test(values.username)) {
+    errors.username = 'Username must not contain spaces.';
+  }
+  if (!EMAIL_PATTERN.test(values.email) || values.email.length > 320) {
+    errors.email = 'Enter a valid email address.';
+  }
+  if (values.password.length === 0) {
+    errors.password = 'Enter a password.';
+  }
+  if (values.confirmPassword !== values.password) {
+    errors.confirmPassword = 'Passwords do not match.';
+  }
+  if (!values.acceptedTerms) {
+    errors.terms = 'Accept the Terms of Service and Privacy Policy to continue.';
+  }
+  return errors;
+}
+
+/** Maps a failed registration to field-level messages where the server says which field. */
+function toFormErrors(error: unknown): FormErrors {
+  if (error instanceof ApiError) {
+    const message = sentence(error.message);
+    if (error.message.startsWith('email')) {
+      return { email: error.status === 409 ? 'This email is already registered.' : message };
     }
-    throw new Error(message, { cause: error });
+    if (error.message.startsWith('username')) {
+      return { username: error.status === 409 ? 'This username is already taken.' : message };
+    }
+    return { form: message };
   }
+  return {
+    form: error instanceof Error ? error.message : 'Registration failed. Please try again.',
+  };
 }
 
-function getFormValue(formData: FormData, name: string): string {
-  const value = formData.get(name);
-  return typeof value === 'string' ? value : '';
-}
-
-async function readApiError(response: Response, fallback: string): Promise<string> {
-  try {
-    const body = (await response.json()) as { error?: unknown };
-    return typeof body.error === 'string' ? body.error : fallback;
-  } catch {
-    return fallback;
-  }
+function sentence(value: string): string {
+  const text = value.charAt(0).toUpperCase() + value.slice(1);
+  return text.endsWith('.') ? text : `${text}.`;
 }

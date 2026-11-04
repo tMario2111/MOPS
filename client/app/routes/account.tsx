@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router';
 
+import { ApiError, apiRequest } from '../lib/api';
+
 interface CurrentUser {
   id: string;
   username: string;
@@ -22,20 +24,20 @@ export default function Account() {
 
     async function loadCurrentUser() {
       try {
-        const response = await fetch(`${getApiBaseUrl()}/api/auth/me`, {
-          credentials: 'include',
-        });
-        if (!response.ok) {
-          throw new Error('Your session is missing or expired.');
-        }
-        const result = (await response.json()) as unknown as CurrentUser;
+        const result = await apiRequest<CurrentUser>('/api/auth/me', { method: 'GET' });
         if (!cancelled) {
           setUser(result);
         }
       } catch (loadError) {
-        if (!cancelled) {
-          setError(loadError instanceof Error ? loadError.message : 'Could not load account.');
+        if (cancelled) {
+          return;
         }
+        // No valid session: send the visitor to the login page.
+        if (loadError instanceof ApiError && loadError.status === 401) {
+          void navigate('/login', { replace: true });
+          return;
+        }
+        setError(loadError instanceof Error ? loadError.message : 'Could not load account.');
       }
     }
 
@@ -43,17 +45,22 @@ export default function Account() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [navigate]);
 
   async function handleLogout() {
+    setError(null);
     setIsLoggingOut(true);
     try {
-      await fetch(`${getApiBaseUrl()}/api/auth/logout`, {
-        method: 'POST',
-        credentials: 'include',
-      });
-    } finally {
+      await apiRequest('/api/auth/logout');
       void navigate('/login');
+    } catch (logoutError) {
+      // A 401 means the session is already gone, which is what logout wants.
+      if (logoutError instanceof ApiError && logoutError.status === 401) {
+        void navigate('/login');
+        return;
+      }
+      setError(logoutError instanceof Error ? logoutError.message : 'Could not log out.');
+      setIsLoggingOut(false);
     }
   }
 
@@ -91,7 +98,7 @@ export default function Account() {
         )}
 
         <button
-          className="w-full rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white transition hover:bg-slate-700 disabled:opacity-50"
+          className="w-full rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
           type="button"
           onClick={() => {
             void handleLogout();
@@ -103,11 +110,4 @@ export default function Account() {
       </section>
     </main>
   );
-}
-
-function getApiBaseUrl(): string {
-  const configured: unknown = import.meta.env.VITE_API_BASE_URL;
-  return typeof configured === 'string' && configured.length > 0
-    ? configured
-    : 'http://localhost:8080';
 }
