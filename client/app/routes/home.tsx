@@ -40,6 +40,7 @@ interface RegistrationStartResult {
 }
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const USERNAME_PATTERN = /^(?=.{4,64}$)(?!_)(?!.*_$)(?!.*__)[a-z0-9_]+$/;
 
 export default function Home() {
   const navigate = useNavigate();
@@ -197,16 +198,15 @@ function validate(values: {
   acceptedTerms: boolean;
 }): FormErrors {
   const errors: FormErrors = {};
-  if (values.username.length < 3 || values.username.length > 64) {
-    errors.username = 'Username must be between 3 and 64 characters.';
-  } else if (/\s/.test(values.username)) {
-    errors.username = 'Username must not contain spaces.';
+  if (!USERNAME_PATTERN.test(values.username)) {
+    errors.username =
+      'Username must be 4-64 characters using lowercase letters, digits, and underscores. Underscores cannot lead, trail, or repeat.';
   }
   if (!EMAIL_PATTERN.test(values.email) || values.email.length > 320) {
     errors.email = 'Enter a valid email address.';
   }
-  if (values.password.length === 0) {
-    errors.password = 'Enter a password.';
+  if (values.password.length < 12) {
+    errors.password = 'Password must be at least 12 characters.';
   }
   if (values.confirmPassword !== values.password) {
     errors.confirmPassword = 'Passwords do not match.';

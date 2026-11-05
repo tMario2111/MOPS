@@ -28,6 +28,7 @@ interface LoginStartResult {
 }
 
 const INVALID_CREDENTIALS = 'Invalid username or password.';
+const USERNAME_PATTERN = /^(?=.{4,64}$)(?!_)(?!.*_$)(?!.*__)[a-z0-9_]+$/;
 
 export default function Login() {
   const navigate = useNavigate();
@@ -43,8 +44,12 @@ export default function Login() {
     const formData = new FormData(event.currentTarget);
     const username = getFormValue(formData, 'username').trim();
     const password = getFormValue(formData, 'password');
-    if (username === '' || password === '') {
+    if (!USERNAME_PATTERN.test(username) || password === '') {
       setError('Enter your username and password.');
+      return;
+    }
+    if (password.length < 12) {
+      setError('Password must be at least 12 characters.');
       return;
     }
 
