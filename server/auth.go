@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -22,6 +23,8 @@ const (
 	maxOpaqueMessage = 16 * 1024
 	maxKeyMaterial   = 64 * 1024
 )
+
+var usernamePattern = regexp.MustCompile(`^[a-z0-9]+(?:_[a-z0-9]+)*$`)
 
 type registrationStartRequest struct {
 	Username      string `json:"username"`
@@ -244,8 +247,8 @@ func (h *authHandler) loginStart(c *gin.Context) {
 		return
 	}
 	request.Username = strings.TrimSpace(request.Username)
-	if request.Username == "" {
-		respondError(c, http.StatusBadRequest, "username is required")
+	if err := validateUsername(request.Username); err != nil {
+		respondError(c, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -395,14 +398,18 @@ func (h *authHandler) currentUser(c *gin.Context) {
 }
 
 func validateRegistrationIdentity(username, email string) error {
-	if len(username) < 3 || len(username) > 64 {
-		return errors.New("username must be between 3 and 64 characters")
-	}
-	if strings.ContainsAny(username, " \t\r\n") {
-		return errors.New("username must not contain whitespace")
+	if err := validateUsername(username); err != nil {
+		return err
 	}
 	if len(email) < 3 || len(email) > 320 || !strings.Contains(email, "@") {
 		return errors.New("email is invalid")
+	}
+	return nil
+}
+
+func validateUsername(username string) error {
+	if len(username) < 4 || len(username) > 64 || !usernamePattern.MatchString(username) {
+		return errors.New("username must be 4-64 lowercase letters, digits, or underscores; underscores cannot lead, trail, or repeat")
 	}
 	return nil
 }

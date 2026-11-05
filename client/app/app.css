@@ -4,13 +4,63 @@
   --font-sans:
     'Inter', ui-sans-serif, system-ui, sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji',
     'Segoe UI Symbol', 'Noto Color Emoji';
+  --font-mono: 'JetBrains Mono', ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+}
+
+/* Theme tokens follow the OS colour scheme (light by default). */
+:root {
+  --canvas: #f8fafc;
+  --card: #ffffff;
+  --line: #e2e8f0;
+  --field: #f6f8fa;
+  --fg: #1a2530;
+  --muted: #64748b;
+  --accent: #217a68;
+  --accent-hover: #1b6657;
+  --on-accent: #ffffff;
+  --accent-soft: #dcefe9;
+  --danger: #b91c1c;
+  --danger-soft: #fef2f2;
+  --card-shadow: 0 8px 30px rgb(15 23 42 / 0.06);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --canvas: #111820;
+    --card: #18222b;
+    --line: #26313a;
+    --field: #0f171d;
+    --fg: #f1f5f4;
+    --muted: #8b98a3;
+    --accent: #6fcfb8;
+    --accent-hover: #82dac5;
+    --on-accent: #0f1a1a;
+    --accent-soft: #1e3b38;
+    --danger: #f87171;
+    --danger-soft: #2a1a1d;
+    --card-shadow: none;
+    color-scheme: dark;
+  }
+}
+
+@theme inline {
+  --color-canvas: var(--canvas);
+  --color-card: var(--card);
+  --color-line: var(--line);
+  --color-field: var(--field);
+  --color-fg: var(--fg);
+  --color-muted: var(--muted);
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-on-accent: var(--on-accent);
+  --color-accent-soft: var(--accent-soft);
+  --color-danger: var(--danger);
+  --color-danger-soft: var(--danger-soft);
+  --shadow-card: var(--card-shadow);
 }
 
 html,
 body {
-  @apply bg-white dark:bg-gray-950;
-
-  @media (prefers-color-scheme: dark) {
-    color-scheme: dark;
-  }
+  background-color: var(--canvas);
+  color: var(--fg);
 }

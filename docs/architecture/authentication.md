@@ -79,6 +79,11 @@ usernames.
 Changing the credential identifier after registration requires users to
 register new OPAQUE credentials.
 
+Usernames are validated on both the client and server. They must be 4–64
+characters and contain only lowercase ASCII letters, digits, and underscores.
+An underscore cannot be the first or last character, and consecutive
+underscores are not allowed.
+
 ## Registration flow
 
 1. The client calls `opaque.client.startRegistration`.

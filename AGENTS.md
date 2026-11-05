@@ -26,6 +26,7 @@ Update the relevant documentation when an architectural or protocol decision cha
 - The server uses Argon2id with the client-compatible parameters.
 - The current OPAQUE credential identifier is the username.
 - The credential identifier must be identical during registration and login.
+- Usernames must be 4–64 characters using lowercase letters, digits, and underscores; underscores cannot lead, trail, or repeat.
 - Do not change `OPAQUE_SERVER_KEY_MATERIAL` casually; changing it invalidates existing credentials.
 - Private keys are generated and wrapped on the client.
 - The server stores only encrypted private-key material.

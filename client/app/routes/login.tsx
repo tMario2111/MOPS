@@ -1,179 +1,163 @@
 import { useState } from 'react';
 import type { FormEvent } from 'react';
-import { Link, useNavigate } from 'react-router';
+import { Link, useLocation, useNavigate } from 'react-router';
 
-import { clearOpaqueSecrets, finishOpaqueLogin, startOpaqueLogin } from '../lib/crypto';
+import {
+  AuthLayout,
+  CheckboxField,
+  FormAlert,
+  LockIcon,
+  SubmitButton,
+  TextField,
+} from '../components/auth-layout';
+import { ApiError, apiRequest, getFormValue } from '../lib/api';
+import {
+  OpaqueProtocolError,
+  clearOpaqueSecrets,
+  finishOpaqueLogin,
+  startOpaqueLogin,
+} from '../lib/crypto';
 
 export function meta() {
   return [{ title: 'Log in' }, { name: 'description', content: 'Log in to Chat App' }];
 }
 
+interface LoginStartResult {
+  login_id: string;
+  opaque_response: string;
+}
+
+const INVALID_CREDENTIALS = 'Invalid username or password.';
+const USERNAME_PATTERN = /^(?=.{4,64}$)(?!_)(?!.*_$)(?!.*__)[a-z0-9_]+$/;
+
 export default function Login() {
   const navigate = useNavigate();
+  const location = useLocation();
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const registeredUsername = getRegisteredUsername(location.state);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError(null);
-    setIsSubmitting(true);
 
     const formData = new FormData(event.currentTarget);
     const username = getFormValue(formData, 'username').trim();
     const password = getFormValue(formData, 'password');
-    const apiBaseUrl = getApiBaseUrl();
+    if (!USERNAME_PATTERN.test(username) || password === '') {
+      setError('Enter your username and password.');
+      return;
+    }
+    if (password.length < 12) {
+      setError('Password must be at least 12 characters.');
+      return;
+    }
 
+    setIsSubmitting(true);
     try {
-      const login = await runLoginStep('Could not initialize OPAQUE login.', () =>
-        startOpaqueLogin(password)
-      );
-      const startResponse = await fetch(`${apiBaseUrl}/api/auth/login/start`, {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          username,
-          opaque_request: login.request,
-        }),
+      const login = await startOpaqueLogin(password);
+      const start = await apiRequest<LoginStartResult>('/api/auth/login/start', {
+        body: { username, opaque_request: login.request },
       });
-
-      if (!startResponse.ok) {
-        throw new Error(await readApiError(startResponse, 'Could not start login.'));
+      if (typeof start.login_id !== 'string' || typeof start.opaque_response !== 'string') {
+        throw new Error('The server returned an invalid login response.');
       }
 
-      const startResult = (await startResponse.json()) as unknown as {
-        login_id: string;
-        opaque_response: string;
-      };
-      if (
-        typeof startResult.login_id !== 'string' ||
-        typeof startResult.opaque_response !== 'string'
-      ) {
-        throw new Error('The server returned an invalid OPAQUE login response.');
-      }
-
-      const opaqueResult = await runLoginStep('Could not finish OPAQUE login.', () =>
-        finishOpaqueLogin(login.session, startResult.opaque_response)
-      );
-
+      // A wrong password makes the client reject the server's OPAQUE response.
+      const opaqueResult = await finishOpaqueLogin(login.session, start.opaque_response);
       try {
-        const finishResponse = await fetch(`${apiBaseUrl}/api/auth/login/finish`, {
-          method: 'POST',
-          credentials: 'include',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            login_id: startResult.login_id,
-            opaque_finish: opaqueResult.finish,
-          }),
+        await apiRequest('/api/auth/login/finish', {
+          body: { login_id: start.login_id, opaque_finish: opaqueResult.finish },
         });
-
-        if (!finishResponse.ok) {
-          throw new Error(await readApiError(finishResponse, 'Could not finish login.'));
-        }
       } finally {
         clearOpaqueSecrets(opaqueResult);
       }
 
       void navigate('/account');
     } catch (loginError) {
-      setError(
-        loginError instanceof Error ? loginError.message : 'Login failed. Please try again.'
-      );
+      setError(toLoginMessage(loginError));
     } finally {
       setIsSubmitting(false);
     }
   }
 
   return (
-    <main className="flex min-h-screen items-center justify-center bg-slate-50 px-6 py-12 text-slate-900">
+    <AuthLayout
+      icon={<LockIcon className="size-5" />}
+      title="Welcome back"
+      subtitle="Sign in to your private space."
+      footerNote="Your conversations stay end-to-end encrypted."
+    >
       <form
-        className="w-full max-w-sm space-y-6 rounded-xl border border-slate-200 bg-white p-8 shadow-sm"
+        className="space-y-4"
         onSubmit={(event) => {
           void handleSubmit(event);
         }}
       >
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Log in</h1>
-          <p className="mt-2 text-sm text-slate-600">Use your username and password.</p>
-        </div>
-
-        <div className="space-y-4">
-          <label className="block text-sm font-medium text-slate-700">
-            Username
-            <input
-              className="mt-2 block w-full rounded-md border border-slate-300 px-3 py-2 text-base font-normal outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
-              name="username"
-              type="text"
-              autoComplete="username"
-              required
-            />
-          </label>
-
-          <label className="block text-sm font-medium text-slate-700">
-            Password
-            <input
-              className="mt-2 block w-full rounded-md border border-slate-300 px-3 py-2 text-base font-normal outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
-              name="password"
-              type="password"
-              autoComplete="current-password"
-              required
-            />
-          </label>
-        </div>
-
-        {error && (
-          <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700" role="alert">
-            {error}
+        {registeredUsername && (
+          <p className="rounded-lg bg-accent-soft px-3 py-2 text-sm text-accent" role="status">
+            Account created for {registeredUsername}. You can sign in now.
           </p>
         )}
 
-        <button
-          className="w-full rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
-          type="submit"
-          disabled={isSubmitting}
-        >
-          {isSubmitting ? 'Logging in...' : 'Log in'}
-        </button>
+        <TextField
+          id="username"
+          label="Username"
+          type="text"
+          autoComplete="username"
+          placeholder="Enter your username"
+          defaultValue={registeredUsername ?? ''}
+          required
+        />
 
-        <p className="text-center text-sm text-slate-600">
-          Need an account?{' '}
-          <Link className="font-medium text-slate-900 underline" to="/">
-            Create one
+        <TextField
+          id="password"
+          label="Password"
+          type="password"
+          autoComplete="current-password"
+          placeholder="Enter your password"
+          trailingLock
+          required
+        />
+
+        <div className="flex items-center justify-between pt-1">
+          <CheckboxField id="remember" defaultChecked>
+            Remember this device
+          </CheckboxField>
+          <span className="text-[11px] font-medium text-accent">Forgot password?</span>
+        </div>
+
+        {error && <FormAlert>{error}</FormAlert>}
+
+        <div className="pt-2">
+          <SubmitButton pending={isSubmitting} idleLabel="Sign in" pendingLabel="Signing in..." />
+        </div>
+
+        <p className="pt-1 text-center text-[13px] text-muted">
+          New to Still?{' '}
+          <Link className="font-medium text-accent hover:underline" to="/">
+            Create an account
           </Link>
         </p>
       </form>
-    </main>
+    </AuthLayout>
   );
 }
 
-async function runLoginStep<T>(message: string, operation: () => Promise<T>): Promise<T> {
-  try {
-    return await operation();
-  } catch (error) {
-    if (error instanceof Error && error.message !== '') {
-      throw new Error(`${message} ${error.message}`, { cause: error });
-    }
-    throw new Error(message, { cause: error });
+function toLoginMessage(error: unknown): string {
+  if (error instanceof OpaqueProtocolError) {
+    return INVALID_CREDENTIALS;
   }
-}
-
-function getApiBaseUrl(): string {
-  const configured: unknown = import.meta.env.VITE_API_BASE_URL;
-  return typeof configured === 'string' && configured.length > 0
-    ? configured
-    : 'http://localhost:8080';
-}
-
-function getFormValue(formData: FormData, name: string): string {
-  const value = formData.get(name);
-  return typeof value === 'string' ? value : '';
-}
-
-async function readApiError(response: Response, fallback: string): Promise<string> {
-  try {
-    const body = (await response.json()) as { error?: unknown };
-    return typeof body.error === 'string' ? body.error : fallback;
-  } catch {
-    return fallback;
+  if (error instanceof ApiError) {
+    return error.status === 401 ? INVALID_CREDENTIALS : error.message;
   }
+  return error instanceof Error ? error.message : 'Login failed. Please try again.';
+}
+
+function getRegisteredUsername(state: unknown): string | null {
+  if (typeof state === 'object' && state !== null && 'registeredUsername' in state) {
+    const value: unknown = state.registeredUsername;
+    return typeof value === 'string' ? value : null;
+  }
+  return null;
 }
