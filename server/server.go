@@ -54,11 +54,18 @@ func main() {
 	router.POST("/api/auth/login/start", auth.loginStart)
 	router.POST("/api/auth/login/finish", auth.loginFinish)
 
+	friendsHandler := newFriendsHandler(db)
+
 	protected := router.Group("/api")
 	protected.Use(requireSession(state))
 	protected.GET("/auth/me", auth.currentUser)
 	protected.POST("/auth/logout", auth.logout)
 	protected.POST("/auth/logout-all", auth.logoutAll)
+
+	protected.POST("/friends/request", friendsHandler.sendRequest)
+	protected.GET("/friends/requests", friendsHandler.listRequests)
+	protected.PUT("/friends/requests/:id", friendsHandler.respondRequest)
+	protected.GET("/friends", friendsHandler.getFriends)
 
 	addr := os.Getenv("HTTP_ADDR")
 	if addr == "" {
@@ -82,7 +89,7 @@ func corsMiddleware() gin.HandlerFunc {
 		c.Header("Access-Control-Allow-Origin", allowedOrigin)
 		c.Header("Vary", "Origin")
 		c.Header("Access-Control-Allow-Headers", "Content-Type")
-		c.Header("Access-Control-Allow-Methods", "POST, OPTIONS")
+		c.Header("Access-Control-Allow-Methods", "POST, PUT, OPTIONS")
 		c.Header("Access-Control-Allow-Credentials", "true")
 		if c.Request.Method == "OPTIONS" {
 			c.AbortWithStatus(204)

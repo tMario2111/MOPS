@@ -22,7 +22,7 @@ export function getApiBaseUrl(): string {
  */
 export async function apiRequest<T = undefined>(
   path: string,
-  options: { method?: 'GET' | 'POST'; body?: Record<string, unknown> } = {}
+  options: { method?: 'GET' | 'POST' | 'PUT'; body?: Record<string, unknown> } = {}
 ): Promise<T> {
   const { method = 'POST', body } = options;
 
