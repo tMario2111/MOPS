@@ -5,5 +5,6 @@ export default [
   route('login', 'routes/login.tsx'),
   route('search', 'routes/search.tsx'),
   route('account', 'routes/account.tsx'),
+  route('friends', 'routes/friends.tsx'),
   route('chats', 'routes/chat.tsx'),
 ] satisfies RouteConfig;

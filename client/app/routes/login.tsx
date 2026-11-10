@@ -73,7 +73,7 @@ export default function Login() {
         clearOpaqueSecrets(opaqueResult);
       }
 
-      void navigate('/account');
+      void navigate('/friends');
     } catch (loginError) {
       setError(toLoginMessage(loginError));
     } finally {
