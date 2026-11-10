@@ -13,7 +13,6 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentUser }) => {
     const navigate = useNavigate();
     const location = useLocation();
     const [showMenu, setShowMenu] = useState(false);
-    const [error, setError] = useState<string | null>(null);
     const [isLoggingOut, setIsLoggingOut] = useState(false);
     const menuRef = useRef<HTMLDivElement>(null);
 
@@ -34,7 +33,6 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentUser }) => {
     }, []);
 
     async function handleLogout() {
-        setError(null);
         setIsLoggingOut(true);
         try {
             await apiRequest('/api/auth/logout');
@@ -45,7 +43,6 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentUser }) => {
                 void navigate('/login');
                 return;
             }
-            setError(logoutError instanceof Error ? logoutError.message : 'Could not log out.');
             setIsLoggingOut(false);
             setShowMenu(false);
         }

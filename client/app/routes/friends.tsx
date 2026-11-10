@@ -4,7 +4,6 @@ import { ApiError, apiRequest } from '../lib/api';
 import { ShieldIcon } from '~/components/auth-layout';
 import { Sidebar } from '~/components/sidebar';
 
-
 interface CurrentUser {
   id: string;
   username: string;
@@ -44,29 +43,28 @@ export default function Friends() {
   const [actionError, setActionError] = useState<string | null>(null);
   const [actionSuccess, setActionSuccess] = useState<string | null>(null);
 
-  const fetchData = async () => {
-    try {
-      setLoading(true);
-      const [userRes, friendsRes, requestsRes] = await Promise.all([
-        apiRequest<CurrentUser>('/api/auth/me', { method: 'GET' }),
-        apiRequest<{ friends: Friend[] }>('/api/friends', { method: 'GET' }),
-        apiRequest<{ requests: FriendRequest[] }>('/api/friends/requests', { method: 'GET' }),
-      ]);
-      setCurrentUser(userRes);
-      setFriends(friendsRes.friends || []);
-      setRequests(requestsRes.requests || []);
-    } catch (err) {
-      if (err instanceof ApiError && err.status === 401) {
-        void navigate('/login', { replace: true });
-        return;
-      }
-      console.error('Failed to load friends data', err);
-    } finally {
-      setLoading(false);
-    }
-  };
-
   useEffect(() => {
+    const fetchData = async () => {
+      try {
+        const [userRes, friendsRes, requestsRes] = await Promise.all([
+          apiRequest<CurrentUser>('/api/auth/me', { method: 'GET' }),
+          apiRequest<{ friends: Friend[] }>('/api/friends', { method: 'GET' }),
+          apiRequest<{ requests: FriendRequest[] }>('/api/friends/requests', { method: 'GET' }),
+        ]);
+        setCurrentUser(userRes);
+        setFriends(friendsRes.friends || []);
+        setRequests(requestsRes.requests || []);
+      } catch (err) {
+        if (err instanceof ApiError && err.status === 401) {
+          void navigate('/login', { replace: true });
+          return;
+        }
+        console.error('Failed to load friends data', err);
+      } finally {
+        setLoading(false);
+      }
+    };
+
     void fetchData();
   }, [navigate]);
 
@@ -81,7 +79,14 @@ export default function Friends() {
       });
       setActionSuccess('Friend request sent successfully!');
       setRecipientUsername('');
-      void fetchData();
+      
+      // Re-fetch data upon sending request
+      const [friendsRes, requestsRes] = await Promise.all([
+        apiRequest<{ friends: Friend[] }>('/api/friends', { method: 'GET' }),
+        apiRequest<{ requests: FriendRequest[] }>('/api/friends/requests', { method: 'GET' }),
+      ]);
+      setFriends(friendsRes.friends || []);
+      setRequests(requestsRes.requests || []);
     } catch (err) {
       setActionError(err instanceof Error ? err.message : 'Failed to send request');
     }
@@ -93,7 +98,12 @@ export default function Friends() {
         method: 'PUT',
         body: { action },
       });
-      void fetchData();
+      const [friendsRes, requestsRes] = await Promise.all([
+        apiRequest<{ friends: Friend[] }>('/api/friends', { method: 'GET' }),
+        apiRequest<{ requests: FriendRequest[] }>('/api/friends/requests', { method: 'GET' }),
+      ]);
+      setFriends(friendsRes.friends || []);
+      setRequests(requestsRes.requests || []);
     } catch (err) {
       alert(err instanceof Error ? err.message : 'Failed to process request');
     }
@@ -138,7 +148,7 @@ export default function Friends() {
             
             {/* Add Friend Form */}
             {showAddModal && (
-              <form onSubmit={handleSendRequest} className="rounded-xl border border-line bg-card p-4 shadow-sm">
+              <form onSubmit={(e) => void handleSendRequest(e)} className="rounded-xl border border-line bg-card p-4 shadow-sm">
                 <h3 className="text-sm font-medium">Send Friend Request</h3>
                 <div className="mt-3 flex gap-3">
                   <input
@@ -212,7 +222,6 @@ export default function Friends() {
                             </td>
                             <td className="px-6 py-4">
                               <span className="inline-block size-2 rounded-full bg-emerald-500 mr-2"></span>
-                              {/* status is hardcoded to online for now */}
                               <span className="text-xs text-muted">Online</span>
                             </td>
                             <td className="px-6 py-4 text-right">
@@ -240,13 +249,13 @@ export default function Friends() {
                         {req.is_incoming && (
                           <div className="flex gap-2">
                             <button
-                              onClick={() => handleRespondRequest(req.id, 'accept')}
+                              onClick={() => void handleRespondRequest(req.id, 'accept')}
                               className="rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-on-accent"
                             >
                               Accept
                             </button>
                             <button
-                              onClick={() => handleRespondRequest(req.id, 'decline')}
+                              onClick={() => void handleRespondRequest(req.id, 'decline')}
                               className="rounded-lg border border-line bg-field px-3 py-1.5 text-xs font-medium"
                             >
                               Decline
@@ -288,13 +297,13 @@ export default function Friends() {
                       </div>
                       <div className="flex gap-2">
                         <button
-                          onClick={() => handleRespondRequest(req.id, 'accept')}
+                          onClick={() => void handleRespondRequest(req.id, 'accept')}
                           className="flex-1 rounded-lg bg-accent py-1.5 text-xs font-medium text-on-accent"
                         >
                           Accept
                         </button>
                         <button
-                          onClick={() => handleRespondRequest(req.id, 'decline')}
+                          onClick={() => void handleRespondRequest(req.id, 'decline')}
                           className="flex-1 rounded-lg border border-line bg-card py-1.5 text-xs font-medium text-fg"
                         >
                           Decline
