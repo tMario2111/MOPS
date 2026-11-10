@@ -33,6 +33,10 @@ func main() {
 		log.Fatal("database schema initialization failed: ", err)
 	}
 
+	if err := ensureUserSearchIndex(ctx, db); err != nil {
+		log.Fatal("user search index initialization failed: ", err)
+	}
+
 	log.Print("connected to database and initialized schema")
 
 	state, err := openBadgerStore()
@@ -56,6 +60,10 @@ func main() {
 
 	protected := router.Group("/api")
 	protected.Use(requireSession(state))
+
+	usersHandler := newUsersHandler(db)
+	protected.GET("/users/search", usersHandler.search)
+
 	protected.GET("/auth/me", auth.currentUser)
 	protected.POST("/auth/logout", auth.logout)
 	protected.POST("/auth/logout-all", auth.logoutAll)
