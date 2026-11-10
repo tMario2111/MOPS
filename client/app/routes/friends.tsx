@@ -79,7 +79,7 @@ export default function Friends() {
       });
       setActionSuccess('Friend request sent successfully!');
       setRecipientUsername('');
-      
+
       // Re-fetch data upon sending request
       const [friendsRes, requestsRes] = await Promise.all([
         apiRequest<{ friends: Friend[] }>('/api/friends', { method: 'GET' }),
@@ -118,13 +118,16 @@ export default function Friends() {
 
       {/* Main View Wrapper */}
       <div className="flex flex-1 flex-col overflow-hidden">
-        
         {/* Full-Width Top Header (Extends all the way across to the right edge) */}
         <header className="flex items-center justify-between border-b border-line px-10 py-6">
           <div>
-            <p className="text-[11px] font-medium uppercase tracking-wider text-muted">Your private space</p>
+            <p className="text-[11px] font-medium uppercase tracking-wider text-muted">
+              Your private space
+            </p>
             <h1 className="mt-1 text-3xl font-semibold tracking-tight">Better, together.</h1>
-            <p className="mt-1 text-sm text-muted">Your people. Your conversations. Always private.</p>
+            <p className="mt-1 text-sm text-muted">
+              Your people. Your conversations. Always private.
+            </p>
           </div>
 
           <div className="flex items-center gap-4">
@@ -142,13 +145,14 @@ export default function Friends() {
 
         {/* Content Area split into Main List and Right Panel */}
         <div className="flex flex-1 overflow-hidden">
-          
           {/* Main Friends List Pane */}
           <main className="flex flex-1 flex-col overflow-y-auto px-10 py-8 space-y-6">
-            
             {/* Add Friend Form */}
             {showAddModal && (
-              <form onSubmit={(e) => void handleSendRequest(e)} className="rounded-xl border border-line bg-card p-4 shadow-sm">
+              <form
+                onSubmit={(e) => void handleSendRequest(e)}
+                className="rounded-xl border border-line bg-card p-4 shadow-sm"
+              >
                 <h3 className="text-sm font-medium">Send Friend Request</h3>
                 <div className="mt-3 flex gap-3">
                   <input
@@ -158,7 +162,10 @@ export default function Friends() {
                     onChange={(e) => setRecipientUsername(e.target.value)}
                     className="flex-1 rounded-lg border border-line bg-field px-3.5 py-2 text-sm outline-none focus:border-accent"
                   />
-                  <button type="submit" className="rounded-lg bg-accent px-4 py-2 text-sm font-medium text-on-accent">
+                  <button
+                    type="submit"
+                    className="rounded-lg bg-accent px-4 py-2 text-sm font-medium text-on-accent"
+                  >
                     Send
                   </button>
                 </div>
@@ -175,15 +182,23 @@ export default function Friends() {
                   activeTab === 'all' ? 'border-accent text-fg' : 'border-transparent text-muted'
                 }`}
               >
-                All friends <span className="ml-1.5 rounded-full bg-field px-2 py-0.5 text-xs">{friends.length}</span>
+                All friends{' '}
+                <span className="ml-1.5 rounded-full bg-field px-2 py-0.5 text-xs">
+                  {friends.length}
+                </span>
               </button>
               <button
                 onClick={() => setActiveTab('requests')}
                 className={`pb-3 text-sm font-medium transition border-b-2 ${
-                  activeTab === 'requests' ? 'border-accent text-fg' : 'border-transparent text-muted'
+                  activeTab === 'requests'
+                    ? 'border-accent text-fg'
+                    : 'border-transparent text-muted'
                 }`}
               >
-                Requests <span className="ml-1.5 rounded-full bg-field px-2 py-0.5 text-xs">{requests.length}</span>
+                Requests{' '}
+                <span className="ml-1.5 rounded-full bg-field px-2 py-0.5 text-xs">
+                  {requests.length}
+                </span>
               </button>
             </div>
 
@@ -241,10 +256,15 @@ export default function Friends() {
                     <p className="text-sm text-muted">No pending requests.</p>
                   ) : (
                     requests.map((req) => (
-                      <div key={req.id} className="flex items-center justify-between rounded-xl border border-line bg-card p-4">
+                      <div
+                        key={req.id}
+                        className="flex items-center justify-between rounded-xl border border-line bg-card p-4"
+                      >
                         <div>
                           <p className="font-medium">{req.from_username}</p>
-                          <p className="text-xs text-muted">{req.is_incoming ? 'Wants to connect with you' : 'Outgoing request'}</p>
+                          <p className="text-xs text-muted">
+                            {req.is_incoming ? 'Wants to connect with you' : 'Outgoing request'}
+                          </p>
                         </div>
                         {req.is_incoming && (
                           <div className="flex gap-2">
@@ -276,7 +296,9 @@ export default function Friends() {
             <div className="rounded-xl border border-line bg-field p-4">
               <div className="flex items-center justify-between mb-2">
                 <h3 className="text-sm font-semibold">Friend requests</h3>
-                <span className="rounded-full bg-card px-2 py-0.5 text-xs">{incomingRequests.length}</span>
+                <span className="rounded-full bg-card px-2 py-0.5 text-xs">
+                  {incomingRequests.length}
+                </span>
               </div>
               <p className="text-xs text-muted mb-4">A couple of new connections.</p>
 
@@ -317,13 +339,16 @@ export default function Friends() {
 
             {/* Privacy Note Box */}
             <div className="rounded-xl border border-line bg-accent-soft/30 p-4 text-xs text-accent">
-              <p className="font-semibold mb-1 flex items-center gap-1.5"><ShieldIcon className="size-5 text-accent" /><span>Connection, not collection.</span> </p>
+              <p className="font-semibold mb-1 flex items-center gap-1.5">
+                <ShieldIcon className="size-5 text-accent" />
+                <span>Connection, not collection.</span>{' '}
+              </p>
               <p className="text-[11px] leading-relaxed opacity-90">
-                We don’t upload your address book or suggest people from your data. Add friends on your own terms.
+                We don’t upload your address book or suggest people from your data. Add friends on
+                your own terms.
               </p>
             </div>
           </aside>
-
         </div>
       </div>
     </div>
