@@ -1,3 +1,6 @@
+import { useEffect, useRef, useState } from 'react';
+import type { FormEvent, KeyboardEvent } from 'react';
+
 interface ChatMessage {
   id: number;
   sender: 'Mario' | 'You';
@@ -5,7 +8,7 @@ interface ChatMessage {
   time: string;
 }
 
-const messages: ChatMessage[] = [
+const initialMessages: ChatMessage[] = [
   {
     id: 1,
     sender: 'You',
@@ -33,13 +36,44 @@ const messages: ChatMessage[] = [
 ];
 
 export function meta() {
-  return [
-    { title: 'Conversation' },
-    { name: 'description', content: 'Conversation with Mario' },
-  ];
+  return [{ title: 'Conversation' }, { name: 'description', content: 'Conversation with Mario' }];
 }
 
 export default function Chat() {
+  const [messages, setMessages] = useState(initialMessages);
+  const [draft, setDraft] = useState('');
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+  }, [messages]);
+
+  function sendMessage(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const text = draft.trim();
+    if (!text) {
+      return;
+    }
+
+    setMessages((currentMessages) => [
+      ...currentMessages,
+      {
+        id: Date.now(),
+        sender: 'You',
+        text,
+        time: new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
+      },
+    ]);
+    setDraft('');
+  }
+
+  function handleMessageKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault();
+      event.currentTarget.form?.requestSubmit();
+    }
+  }
+
   return (
     <main className="min-h-dvh bg-canvas px-3 py-4 text-fg sm:px-6 sm:py-8">
       <section className="mx-auto flex h-[calc(100dvh-2rem)] w-full max-w-5xl flex-col overflow-hidden rounded-xl border border-line bg-card shadow-card sm:h-[calc(100dvh-4rem)]">
@@ -83,11 +117,7 @@ export default function Chat() {
                       M
                     </div>
                   )}
-                  <div
-                    className={`max-w-[85%] sm:max-w-[70%] ${
-                      isOutgoing ? 'text-right' : ''
-                    }`}
-                  >
+                  <div className={`max-w-[85%] sm:max-w-[70%] ${isOutgoing ? 'text-right' : ''}`}>
                     <p
                       className={`rounded-2xl px-4 py-3 text-left text-sm leading-6 ${
                         isOutgoing
@@ -97,42 +127,45 @@ export default function Chat() {
                     >
                       {message.text}
                     </p>
-                    <time className="mt-1.5 block px-1 text-[10px] text-muted">
-                      {message.time}
-                    </time>
+                    <time className="mt-1.5 block px-1 text-[10px] text-muted">{message.time}</time>
                   </div>
                 </li>
               );
             })}
           </ol>
+          <div ref={messagesEndRef} />
         </div>
 
         <footer className="border-t border-line p-4 sm:px-7 sm:py-5">
-          <div className="flex items-center gap-2 rounded-xl border border-line bg-field p-2">
-            <button
-              className="flex size-9 shrink-0 items-center justify-center rounded-lg text-muted"
-              type="button"
-              aria-label="Attachments are unavailable in this preview"
-              disabled
-            >
-              <PaperclipIcon />
-            </button>
-            <textarea
-              className="min-h-9 flex-1 resize-none bg-transparent px-1 py-2 text-sm text-fg outline-none placeholder:text-muted"
-              aria-label="Message"
-              placeholder="Write a message..."
-              rows={1}
-              readOnly
-            />
-            <button
-              className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-accent text-on-accent opacity-60"
-              type="button"
-              aria-label="Sending is unavailable in this preview"
-              disabled
-            >
-              <SendIcon />
-            </button>
-          </div>
+          <form onSubmit={sendMessage}>
+            <div className="flex items-center gap-2 rounded-xl border border-line bg-field p-2">
+              <button
+                className="flex size-9 shrink-0 items-center justify-center rounded-lg text-muted"
+                type="button"
+                aria-label="Attachments are not available"
+                disabled
+              >
+                <PaperclipIcon />
+              </button>
+              <textarea
+                className="min-h-9 flex-1 resize-none bg-transparent px-1 py-2 text-sm text-fg outline-none placeholder:text-muted"
+                aria-label="Message"
+                placeholder="Write a message..."
+                rows={1}
+                value={draft}
+                onChange={(event) => setDraft(event.currentTarget.value)}
+                onKeyDown={handleMessageKeyDown}
+              />
+              <button
+                className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-accent text-on-accent transition hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-50"
+                type="submit"
+                aria-label="Send message"
+                disabled={!draft.trim()}
+              >
+                <SendIcon />
+              </button>
+            </div>
+          </form>
         </footer>
       </section>
     </main>
