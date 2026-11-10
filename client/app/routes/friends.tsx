@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router';
 import { ApiError, apiRequest } from '../lib/api';
 import { ShieldIcon } from '~/components/auth-layout';
 import { Sidebar } from '~/components/sidebar';
+import { UserSearch, type UserSearchResult } from '~/components/user-search';
 
 interface CurrentUser {
   id: string;
@@ -39,7 +40,9 @@ export default function Friends() {
 
   // Add friend state
   const [showAddModal, setShowAddModal] = useState<boolean>(false);
-  const [recipientUsername, setRecipientUsername] = useState<string>('');
+  const [pendingUsername, setPendingUsername] = useState<string | null>(null);
+  // Remounting the search box clears its query after a request is sent.
+  const [searchKey, setSearchKey] = useState<number>(0);
   const [actionError, setActionError] = useState<string | null>(null);
   const [actionSuccess, setActionSuccess] = useState<string | null>(null);
 
@@ -68,27 +71,33 @@ export default function Friends() {
     void fetchData();
   }, [navigate]);
 
-  const handleSendRequest = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const refreshFriendsData = async () => {
+    const [friendsRes, requestsRes] = await Promise.all([
+      apiRequest<{ friends: Friend[] }>('/api/friends', { method: 'GET' }),
+      apiRequest<{ requests: FriendRequest[] }>('/api/friends/requests', { method: 'GET' }),
+    ]);
+    setFriends(friendsRes.friends || []);
+    setRequests(requestsRes.requests || []);
+  };
+
+  const handleSendRequest = async (user: UserSearchResult) => {
     setActionError(null);
     setActionSuccess(null);
+    setPendingUsername(user.username);
     try {
       await apiRequest('/api/friends/request', {
         method: 'POST',
-        body: { recipient_username: recipientUsername },
+        body: { recipient_username: user.username },
       });
-      setActionSuccess('Friend request sent successfully!');
-      setRecipientUsername('');
+      setActionSuccess(`Friend request sent to @${user.username}.`);
+      setSearchKey((key) => key + 1);
 
       // Re-fetch data upon sending request
-      const [friendsRes, requestsRes] = await Promise.all([
-        apiRequest<{ friends: Friend[] }>('/api/friends', { method: 'GET' }),
-        apiRequest<{ requests: FriendRequest[] }>('/api/friends/requests', { method: 'GET' }),
-      ]);
-      setFriends(friendsRes.friends || []);
-      setRequests(requestsRes.requests || []);
+      await refreshFriendsData();
     } catch (err) {
       setActionError(err instanceof Error ? err.message : 'Failed to send request');
+    } finally {
+      setPendingUsername(null);
     }
   };
 
@@ -98,18 +107,24 @@ export default function Friends() {
         method: 'PUT',
         body: { action },
       });
-      const [friendsRes, requestsRes] = await Promise.all([
-        apiRequest<{ friends: Friend[] }>('/api/friends', { method: 'GET' }),
-        apiRequest<{ requests: FriendRequest[] }>('/api/friends/requests', { method: 'GET' }),
-      ]);
-      setFriends(friendsRes.friends || []);
-      setRequests(requestsRes.requests || []);
+      await refreshFriendsData();
     } catch (err) {
       alert(err instanceof Error ? err.message : 'Failed to process request');
     }
   };
 
   const incomingRequests = requests.filter((r) => r.is_incoming);
+  const friendUsernames = new Set(friends.map((friend) => friend.username));
+
+  const searchActionFor = (user: UserSearchResult) => {
+    if (pendingUsername === user.username) {
+      return { label: 'Sending…', disabled: true };
+    }
+    if (friendUsernames.has(user.username)) {
+      return { label: 'Friends', disabled: true };
+    }
+    return { label: 'Add', disabled: false };
+  };
 
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-canvas text-fg">
@@ -147,31 +162,29 @@ export default function Friends() {
         <div className="flex flex-1 overflow-hidden">
           {/* Main Friends List Pane */}
           <main className="flex flex-1 flex-col overflow-y-auto px-10 py-8 space-y-6">
-            {/* Add Friend Form */}
+            {/* Add Friend Panel */}
             {showAddModal && (
-              <form
-                onSubmit={(e) => void handleSendRequest(e)}
-                className="rounded-xl border border-line bg-card p-4 shadow-sm"
-              >
-                <h3 className="text-sm font-medium">Send Friend Request</h3>
-                <div className="mt-3 flex gap-3">
-                  <input
-                    type="text"
-                    placeholder="Recipient username"
-                    value={recipientUsername}
-                    onChange={(e) => setRecipientUsername(e.target.value)}
-                    className="flex-1 rounded-lg border border-line bg-field px-3.5 py-2 text-sm outline-none focus:border-accent"
+              <div className="rounded-xl border border-line bg-card p-4 shadow-sm">
+                <h3 className="text-sm font-medium">Add a friend</h3>
+                <p className="mt-1 text-xs text-muted">
+                  Search by full or partial username, then pick the person you want to connect with.
+                </p>
+                <div className="mt-3">
+                  <UserSearch
+                    key={searchKey}
+                    inputId="friend-search"
+                    placeholder="Search usernames..."
+                    onSelect={(user) => void handleSendRequest(user)}
+                    getAction={searchActionFor}
                   />
-                  <button
-                    type="submit"
-                    className="rounded-lg bg-accent px-4 py-2 text-sm font-medium text-on-accent"
-                  >
-                    Send
-                  </button>
                 </div>
-                {actionError && <p className="mt-2 text-xs text-danger">{actionError}</p>}
+                {actionError && (
+                  <p className="mt-2 text-xs text-danger" role="alert">
+                    {actionError}
+                  </p>
+                )}
                 {actionSuccess && <p className="mt-2 text-xs text-accent">{actionSuccess}</p>}
-              </form>
+              </div>
             )}
 
             {/* Tabs Bar */}
