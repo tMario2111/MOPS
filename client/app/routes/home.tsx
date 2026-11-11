@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
 import { Link, useNavigate } from 'react-router';
 
@@ -17,6 +17,7 @@ import {
   generateAccountKeys,
   startOpaqueRegistration,
 } from '../lib/crypto';
+import { isPasswordBlocked, loadPasswordBlocklist } from '../lib/password-blocklist';
 
 export function meta() {
   return [
@@ -47,6 +48,11 @@ export default function Home() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errors, setErrors] = useState<FormErrors>({});
 
+  // Warm the cache so submitting does not wait on the blocklist download.
+  useEffect(() => {
+    void loadPasswordBlocklist().catch(() => undefined);
+  }, []);
+
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
@@ -72,6 +78,19 @@ export default function Home() {
 
     setIsSubmitting(true);
     try {
+      let blocked = false;
+      try {
+        blocked = await isPasswordBlocked(password);
+      } catch (blocklistError) {
+        // The blocklist is a client-side safety net, not a security boundary:
+        // a failed download must not prevent the user from registering.
+        console.warn('Could not check the password against the blocklist', blocklistError);
+      }
+      if (blocked) {
+        setErrors({ password: 'This password is commonly used. Choose a different password.' });
+        return;
+      }
+
       const opaque = await startOpaqueRegistration(password);
       const start = await apiRequest<RegistrationStartResult>('/api/auth/register/start', {
         body: { username, email, opaque_request: opaque.request },
@@ -149,7 +168,7 @@ export default function Home() {
           type="password"
           autoComplete="new-password"
           placeholder="Create a strong password"
-          hint="Use at least 12 characters for a stronger password."
+          hint="Use at least 12 characters and avoid commonly used passwords."
           error={errors.password}
           trailingLock
         />
