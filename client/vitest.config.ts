@@ -14,6 +14,8 @@ export default defineConfig({
       provider: 'v8',
       reporter: ['text', 'lcov'],
       reportsDirectory: './coverage',
+      // Include untested files at 0% so the report reflects the whole app.
+      include: ['app/**/*.{ts,tsx}'],
     },
   },
 });
