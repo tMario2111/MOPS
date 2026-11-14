@@ -86,6 +86,45 @@ func TestTemporaryStateRoundTrip(t *testing.T) {
 	}
 }
 
+func TestRegistrationReservationsAreExclusiveAndReleased(t *testing.T) {
+	store := newTestBadgerStore(t)
+	firstID := uuid.New()
+	first := pendingRegistrationState{
+		Username: "test_user",
+		Email:    "test@example.com",
+		Created:  time.Now().UTC(),
+	}
+	if err := store.reserveRegistration(firstID, first); err != nil {
+		t.Fatalf("reserve first registration: %v", err)
+	}
+
+	if err := store.reserveRegistration(uuid.New(), pendingRegistrationState{
+		Username: "test_user",
+		Email:    "other@example.com",
+		Created:  time.Now().UTC(),
+	}); !errors.Is(err, errRegistrationAlreadyPending) {
+		t.Fatalf("duplicate username reservation error = %v", err)
+	}
+	if err := store.reserveRegistration(uuid.New(), pendingRegistrationState{
+		Username: "other_user",
+		Email:    "test@example.com",
+		Created:  time.Now().UTC(),
+	}); !errors.Is(err, errRegistrationAlreadyPending) {
+		t.Fatalf("duplicate email reservation error = %v", err)
+	}
+
+	if err := store.deleteRegistration(firstID); err != nil {
+		t.Fatalf("delete first registration: %v", err)
+	}
+	if err := store.reserveRegistration(uuid.New(), pendingRegistrationState{
+		Username: "test_user",
+		Email:    "test@example.com",
+		Created:  time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("reserve after release: %v", err)
+	}
+}
+
 func TestRegistrationVerificationAttempts(t *testing.T) {
 	store := newTestBadgerStore(t)
 	id := uuid.New()

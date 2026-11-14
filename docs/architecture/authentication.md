@@ -107,8 +107,10 @@ OPAQUE registration are complete. The exact sequence is:
 
    The server validates the identity, creates the OPAQUE registration response,
    generates an 8-character uppercase alphanumeric verification code, stores
-   only its hash in temporary Badger state, and prints the mock email code in
-   the server terminal. It returns:
+   only its hash in temporary Badger state, and atomically reserves the
+   normalized username and email for the pending registration. The reservations
+   have the same 10-minute TTL as the registration state. It prints the mock
+   email code in the server terminal and returns:
 
    ```json
    {
@@ -155,6 +157,13 @@ OPAQUE registration are complete. The exact sequence is:
    the server returns `410 Gone`. The client disables further code entry and
    submission, and prompts the user to start registration again for a new
    code. An expired or missing registration also returns `410 Gone`.
+
+   A second registration cannot reserve the same username or email while a
+   pending registration is active; the server returns `409 Conflict`. The
+   reservation is released when registration finishes successfully or when the
+   pending registration is invalidated. If the user abandons the flow, the
+   reservation expires with the 10-minute Badger TTL, after which registration
+   can be started again.
 5. Only after successful verification does the client send the final request:
 
    ```http

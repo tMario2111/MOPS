@@ -21,15 +21,17 @@ import (
 )
 
 const (
-	badgerRegistrationPrefix = "registration:"
-	badgerLoginPrefix        = "login:"
-	badgerSessionPrefix      = "session:"
-	registrationStateTTL     = 10 * time.Minute
-	verificationMaxAttempts  = 3
-	loginStateTTL            = 10 * time.Minute
-	sessionAbsoluteTTL       = 30 * 24 * time.Hour
-	sessionIdleTTL           = 24 * time.Hour
-	sessionCookieName        = "mops_session"
+	badgerRegistrationPrefix         = "registration:"
+	badgerRegistrationUsernamePrefix = "registration-username:"
+	badgerRegistrationEmailPrefix    = "registration-email:"
+	badgerLoginPrefix                = "login:"
+	badgerSessionPrefix              = "session:"
+	registrationStateTTL             = 10 * time.Minute
+	verificationMaxAttempts          = 3
+	loginStateTTL                    = 10 * time.Minute
+	sessionAbsoluteTTL               = 30 * 24 * time.Hour
+	sessionIdleTTL                   = 24 * time.Hour
+	sessionCookieName                = "mops_session"
 )
 
 type badgerStore struct {
@@ -37,6 +39,7 @@ type badgerStore struct {
 }
 
 var errVerificationAttemptsExceeded = errors.New("verification attempts exceeded")
+var errRegistrationAlreadyPending = errors.New("registration already pending")
 
 type registrationVerificationResult struct {
 	Verified          bool
@@ -120,6 +123,34 @@ func (s *badgerStore) putRegistration(id uuid.UUID, state pendingRegistrationSta
 	return s.putJSON(badgerRegistrationPrefix+id.String(), state, registrationStateTTL)
 }
 
+func (s *badgerStore) reserveRegistration(id uuid.UUID, state pendingRegistrationState) error {
+	data, err := json.Marshal(state)
+	if err != nil {
+		return fmt.Errorf("marshal registration state: %w", err)
+	}
+	usernameKey := registrationReservationKey(badgerRegistrationUsernamePrefix, state.Username)
+	emailKey := registrationReservationKey(badgerRegistrationEmailPrefix, state.Email)
+	return s.db.Update(func(txn *badger.Txn) error {
+		for _, key := range []string{usernameKey, emailKey} {
+			if _, err := txn.Get([]byte(key)); err == nil {
+				return errRegistrationAlreadyPending
+			} else if !errors.Is(err, badger.ErrKeyNotFound) {
+				return err
+			}
+		}
+		entry := badger.NewEntry([]byte(badgerRegistrationPrefix+id.String()), data).WithTTL(registrationStateTTL)
+		if err := txn.SetEntry(entry); err != nil {
+			return err
+		}
+		for _, key := range []string{usernameKey, emailKey} {
+			if err := txn.SetEntry(badger.NewEntry([]byte(key), []byte(id.String())).WithTTL(registrationStateTTL)); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
 func (s *badgerStore) getRegistration(id uuid.UUID) (pendingRegistrationState, error) {
 	var state pendingRegistrationState
 	err := s.getJSON(badgerRegistrationPrefix+id.String(), &state)
@@ -127,7 +158,13 @@ func (s *badgerStore) getRegistration(id uuid.UUID) (pendingRegistrationState, e
 }
 
 func (s *badgerStore) deleteRegistration(id uuid.UUID) error {
-	return s.delete(badgerRegistrationPrefix + id.String())
+	state, err := s.getRegistration(id)
+	if err != nil {
+		return err
+	}
+	return s.db.Update(func(txn *badger.Txn) error {
+		return deleteRegistrationEntries(txn, id, state)
+	})
 }
 
 func (s *badgerStore) verifyRegistration(id uuid.UUID, code string) (registrationVerificationResult, error) {
@@ -162,8 +199,9 @@ func (s *badgerStore) verifyRegistration(id uuid.UUID, code string) (registratio
 			state.VerificationAttempts++
 			if state.VerificationAttempts >= verificationMaxAttempts {
 				attemptsExceeded = true
-				return txn.Delete(key)
+				return deleteRegistrationEntries(txn, id, state)
 			}
+
 			result.AttemptsRemaining = verificationMaxAttempts - state.VerificationAttempts
 		} else {
 			state.EmailVerified = true
@@ -184,6 +222,24 @@ func (s *badgerStore) verifyRegistration(id uuid.UUID, code string) (registratio
 		err = errVerificationAttemptsExceeded
 	}
 	return result, err
+}
+
+func deleteRegistrationEntries(txn *badger.Txn, id uuid.UUID, state pendingRegistrationState) error {
+	for _, key := range []string{
+		badgerRegistrationPrefix + id.String(),
+		registrationReservationKey(badgerRegistrationUsernamePrefix, state.Username),
+		registrationReservationKey(badgerRegistrationEmailPrefix, state.Email),
+	} {
+		if err := txn.Delete([]byte(key)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func registrationReservationKey(prefix, value string) string {
+	hash := sha256.Sum256([]byte(value))
+	return prefix + hex.EncodeToString(hash[:])
 }
 
 func (s *badgerStore) putLogin(id uuid.UUID, state pendingLoginState) error {
