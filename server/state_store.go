@@ -39,7 +39,8 @@ type badgerStore struct {
 }
 
 var errVerificationAttemptsExceeded = errors.New("verification attempts exceeded")
-var errRegistrationAlreadyPending = errors.New("registration already pending")
+var errUsernameRegistrationPending = errors.New("username registration already pending")
+var errEmailRegistrationPending = errors.New("email registration already pending")
 
 type registrationVerificationResult struct {
 	Verified          bool
@@ -131,12 +132,15 @@ func (s *badgerStore) reserveRegistration(id uuid.UUID, state pendingRegistratio
 	usernameKey := registrationReservationKey(badgerRegistrationUsernamePrefix, state.Username)
 	emailKey := registrationReservationKey(badgerRegistrationEmailPrefix, state.Email)
 	return s.db.Update(func(txn *badger.Txn) error {
-		for _, key := range []string{usernameKey, emailKey} {
-			if _, err := txn.Get([]byte(key)); err == nil {
-				return errRegistrationAlreadyPending
-			} else if !errors.Is(err, badger.ErrKeyNotFound) {
-				return err
-			}
+		if _, err := txn.Get([]byte(usernameKey)); err == nil {
+			return errUsernameRegistrationPending
+		} else if !errors.Is(err, badger.ErrKeyNotFound) {
+			return err
+		}
+		if _, err := txn.Get([]byte(emailKey)); err == nil {
+			return errEmailRegistrationPending
+		} else if !errors.Is(err, badger.ErrKeyNotFound) {
+			return err
 		}
 		entry := badger.NewEntry([]byte(badgerRegistrationPrefix+id.String()), data).WithTTL(registrationStateTTL)
 		if err := txn.SetEntry(entry); err != nil {

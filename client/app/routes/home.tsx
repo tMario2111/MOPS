@@ -256,10 +256,24 @@ function toFormErrors(error: unknown): FormErrors {
   if (error instanceof ApiError) {
     const message = sentence(error.message);
     if (error.message.startsWith('email')) {
-      return { email: error.status === 409 ? 'This email is already registered.' : message };
+      return {
+        email:
+          error.status === 409
+            ? error.message.includes('pending')
+              ? 'This email is already being used in another registration.'
+              : 'This email is already registered.'
+            : message,
+      };
     }
     if (error.message.startsWith('username')) {
-      return { username: error.status === 409 ? 'This username is already taken.' : message };
+      return {
+        username:
+          error.status === 409
+            ? error.message.includes('pending')
+              ? 'This username is already being used in another registration.'
+              : 'This username is already taken.'
+            : message,
+      };
     }
     return { form: message };
   }

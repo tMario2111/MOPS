@@ -155,6 +155,8 @@ export default function RegisterVerify() {
     } catch (verificationError) {
       if (verificationError instanceof ApiError && verificationError.status === 400) {
         setAttemptsRemaining((attempts) => Math.max(0, attempts - 1));
+        setCharacters(Array.from({ length: VERIFICATION_CODE_LENGTH }, () => ''));
+        inputs.current[0]?.focus();
       }
       if (verificationError instanceof ApiError && verificationError.status === 410) {
         setAttemptsRemaining(0);
@@ -199,17 +201,19 @@ export default function RegisterVerify() {
             {expired
               ? 'Code expired.'
               : locked
-                ? 'Verification attempts used.'
+                ? 'You have used all verification attempts.'
                 : `Code expires in ${formatVerificationTime(remainingSeconds)}.`}
           </p>
-        </div>
-
-        {error && <FormAlert>{error}</FormAlert>}
-        {!locked && !expired && (
-          <>
-            <p className="text-center text-[11px] text-muted">
+          {!locked && !expired && (
+            <p className="mt-1 text-center text-[11px] text-muted">
               {attemptsRemaining} {attemptsRemaining === 1 ? 'attempt' : 'attempts'} remaining
             </p>
+          )}
+        </div>
+
+        {error && <div className="mt-3"><FormAlert>{error}</FormAlert></div>}
+        {!locked && !expired && (
+          <>
             <SubmitButton
               pending={isSubmitting}
               idleLabel="Verify email"
@@ -265,9 +269,13 @@ function getRegistrationState(state: unknown): RegistrationVerificationState | n
 
 function toVerificationMessage(error: unknown): string {
   if (error instanceof ApiError) {
-    return error.status === 400
-      ? 'That code is invalid or expired. Check it and try again.'
-      : error.message;
+    if (error.status === 400) {
+      return 'That code is not correct. Please check your email and try again.';
+    }
+    if (error.status === 410) {
+      return 'This verification session has ended. Please start registration again.';
+    }
+    return 'We could not verify your email right now. Please try again.';
   }
-  return error instanceof Error ? error.message : 'Email verification failed. Please try again.';
+  return 'We could not verify your email right now. Please try again.';
 }

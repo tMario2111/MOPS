@@ -141,8 +141,12 @@ func (h *authHandler) registerStart(c *gin.Context) {
 		Created:              time.Now().UTC(),
 	}
 	if err := h.state.reserveRegistration(id, pending); err != nil {
-		if errors.Is(err, errRegistrationAlreadyPending) {
-			respondError(c, http.StatusConflict, "username or email has a pending registration")
+		if errors.Is(err, errUsernameRegistrationPending) {
+			respondError(c, http.StatusConflict, "username has a pending registration")
+			return
+		}
+		if errors.Is(err, errEmailRegistrationPending) {
+			respondError(c, http.StatusConflict, "email has a pending registration")
 			return
 		}
 		respondError(c, http.StatusInternalServerError, "could not store registration state")

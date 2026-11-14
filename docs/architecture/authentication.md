@@ -159,11 +159,12 @@ OPAQUE registration are complete. The exact sequence is:
    code. An expired or missing registration also returns `410 Gone`.
 
    A second registration cannot reserve the same username or email while a
-   pending registration is active; the server returns `409 Conflict`. The
-   reservation is released when registration finishes successfully or when the
-   pending registration is invalidated. If the user abandons the flow, the
-   reservation expires with the 10-minute Badger TTL, after which registration
-   can be started again.
+   pending registration is active; the server returns `409 Conflict` and
+   identifies whether the username or email is already pending. The reservation
+   is released when registration finishes successfully or when the pending
+   registration is invalidated. If the user abandons the flow, the reservation
+   expires with the 10-minute Badger TTL, after which registration can be
+   started again.
 5. Only after successful verification does the client send the final request:
 
    ```http

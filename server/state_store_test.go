@@ -102,14 +102,14 @@ func TestRegistrationReservationsAreExclusiveAndReleased(t *testing.T) {
 		Username: "test_user",
 		Email:    "other@example.com",
 		Created:  time.Now().UTC(),
-	}); !errors.Is(err, errRegistrationAlreadyPending) {
+	}); !errors.Is(err, errUsernameRegistrationPending) {
 		t.Fatalf("duplicate username reservation error = %v", err)
 	}
 	if err := store.reserveRegistration(uuid.New(), pendingRegistrationState{
 		Username: "other_user",
 		Email:    "test@example.com",
 		Created:  time.Now().UTC(),
-	}); !errors.Is(err, errRegistrationAlreadyPending) {
+	}); !errors.Is(err, errEmailRegistrationPending) {
 		t.Fatalf("duplicate email reservation error = %v", err)
 	}
 
