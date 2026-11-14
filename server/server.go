@@ -54,6 +54,7 @@ func main() {
 	router.Use(gin.Logger(), gin.Recovery())
 	router.Use(corsMiddleware())
 	router.POST("/api/auth/register/start", auth.registerStart)
+	router.POST("/api/auth/register/verify", auth.registerVerify)
 	router.POST("/api/auth/register/finish", auth.registerFinish)
 	router.POST("/api/auth/login/start", auth.loginStart)
 	router.POST("/api/auth/login/finish", auth.loginFinish)
