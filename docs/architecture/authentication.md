@@ -86,18 +86,98 @@ underscores are not allowed.
 
 ## Registration flow
 
-1. The client calls `opaque.client.startRegistration`.
-2. The client sends the registration request to
-   `POST /api/auth/register/start`.
-3. The server validates the username and email, creates the OPAQUE
-   registration response, and stores temporary registration state in Badger.
-4. The client finishes OPAQUE registration.
-5. The client generates X25519 and Ed25519 identity keys.
-6. The client derives a wrapping key with Argon2id and wraps both private keys
-   with XChaCha20-Poly1305.
-7. The client sends the OPAQUE record and encrypted key material to
-   `POST /api/auth/register/finish`.
-8. The server stores the user in PostgreSQL.
+The account is not created until both the email verification and the client-side
+OPAQUE registration are complete. The exact sequence is:
+
+1. The client validates the form locally and calls
+   `opaque.client.startRegistration(password)`. The password remains in the
+   browser.
+2. The client sends the first request:
+
+   ```http
+   POST /api/auth/register/start
+   Content-Type: application/json
+
+   {
+     "username": "mario_123",
+     "email": "mario@example.com",
+     "opaque_request": "<base64url OPAQUE registration request>"
+   }
+   ```
+
+   The server validates the identity, creates the OPAQUE registration response,
+   generates an 8-character uppercase alphanumeric verification code, stores
+   only its hash in temporary Badger state, and prints the mock email code in
+   the server terminal. It returns:
+
+   ```json
+   {
+     "registration_id": "<uuid>",
+     "opaque_response": "<base64url OPAQUE registration response>"
+   }
+   ```
+
+3. The client processes `opaque_response` locally with
+   `opaque.client.finishRegistration`. It also generates the account identity
+   keys and wraps the private keys locally. The resulting OPAQUE record and
+   encrypted key material are held in browser route state; no account is
+   created yet.
+4. The user enters the code and the client sends:
+
+   ```http
+   POST /api/auth/register/verify
+   Content-Type: application/json
+
+   {
+     "registration_id": "<uuid>",
+     "code": "A1B2C3D4"
+   }
+   ```
+
+   On success, the server marks the pending registration as email-verified and
+   returns:
+
+   ```json
+   { "verified": true }
+   ```
+
+   The code expires after 10 minutes. Each invalid code increments the
+   attempt count and the response includes the remaining attempt count:
+
+   ```json
+   {
+     "error": "invalid verification code",
+     "attempts_remaining": 2
+   }
+   ```
+
+   After the third invalid attempt, the pending registration is deleted and
+   the server returns `410 Gone`. The client disables further code entry and
+   submission, and prompts the user to start registration again for a new
+   code. An expired or missing registration also returns `410 Gone`.
+5. Only after successful verification does the client send the final request:
+
+   ```http
+   POST /api/auth/register/finish
+   Content-Type: application/json
+
+   {
+     "registration_id": "<uuid>",
+     "opaque_record": "<base64url OPAQUE registration record>",
+     "public_key": "<base64url public X25519 key>",
+     "signing_public_key": "<base64url public Ed25519 key>",
+     "wrapped_x25519_private_key": "<encrypted private key>",
+     "wrapped_ed25519_private_key": "<encrypted private key>",
+     "key_wrap_nonce": "<nonce metadata>",
+     "key_wrap_salt": "<Argon2id salt>",
+     "key_wrap_params": {}
+   }
+   ```
+
+   The server checks that the registration exists and is email-verified before
+   validating the OPAQUE record, checking username/email uniqueness, and
+   inserting the account into PostgreSQL. If verification has not succeeded,
+   the server returns `403 Forbidden` and does not create the account.
 
 The server stores encrypted private-key material only. It does not receive the
 password or plaintext private keys.
@@ -123,6 +203,9 @@ Badger stores short-lived protocol state:
 |---|---|---:|
 | Registration state | `registration:` | 10 minutes |
 | Login state | `login:` | 10 minutes |
+
+Registration state includes the pending identity, a hash of the email
+verification code, the invalid-attempt count, and the verification status.
 
 Registration and login state is deleted after successful completion.
 

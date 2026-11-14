@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
-import { Link, useNavigate } from 'react-router';
+import { Link, useLocation, useNavigate } from 'react-router';
 
 import {
   AuthLayout,
@@ -17,6 +17,7 @@ import {
   generateAccountKeys,
   startOpaqueRegistration,
 } from '../lib/crypto';
+import type { KeyWrapParams } from '../lib/crypto';
 import { isPasswordBlocked, loadPasswordBlocklist } from '../lib/password-blocklist';
 
 export function meta() {
@@ -40,13 +41,30 @@ interface RegistrationStartResult {
   opaque_response: string;
 }
 
+export interface RegistrationVerificationState {
+   registrationId: string;
+   username: string;
+   email: string;
+   opaqueRecord: string;
+   publicKey: string;
+   signingPublicKey: string;
+   wrappedX25519PrivateKey: string;
+   wrappedEd25519PrivateKey: string;
+   keyWrapNonce: string;
+   keyWrapSalt: string;
+   keyWrapParams: KeyWrapParams;
+}
+
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const USERNAME_PATTERN = /^(?=.{4,64}$)(?!_)(?!.*_$)(?!.*__)[a-z0-9_]+$/;
 
 export default function Home() {
   const navigate = useNavigate();
+  const location = useLocation();
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [errors, setErrors] = useState<FormErrors>({});
+  const [errors, setErrors] = useState<FormErrors>(() => ({
+    form: getRegistrationMessage(location.state),
+  }));
 
   // Warm the cache so submitting does not wait on the blocklist download.
   useEffect(() => {
@@ -102,25 +120,22 @@ export default function Home() {
       const wrappedKeys = await generateAccountKeys(password);
       const opaqueResult = await finishOpaqueRegistration(opaque.session, start.opaque_response);
 
-      try {
-        await apiRequest('/api/auth/register/finish', {
-          body: {
-            registration_id: start.registration_id,
-            opaque_record: opaqueResult.record,
-            public_key: wrappedKeys.publicX25519Key,
-            signing_public_key: wrappedKeys.publicEd25519Key,
-            wrapped_x25519_private_key: wrappedKeys.wrappedX25519PrivateKey,
-            wrapped_ed25519_private_key: wrappedKeys.wrappedEd25519PrivateKey,
-            key_wrap_nonce: wrappedKeys.keyWrapNonce,
-            key_wrap_salt: wrappedKeys.keyWrapSalt,
-            key_wrap_params: wrappedKeys.keyWrapParams,
-          },
-        });
-      } finally {
-        clearOpaqueSecrets(opaqueResult);
-      }
-
-      void navigate('/login', { state: { registeredUsername: username } });
+      clearOpaqueSecrets(opaqueResult);
+      void navigate('/register/verify', {
+        state: {
+          registrationId: start.registration_id,
+          username,
+          email,
+          opaqueRecord: opaqueResult.record,
+          publicKey: wrappedKeys.publicX25519Key,
+          signingPublicKey: wrappedKeys.publicEd25519Key,
+          wrappedX25519PrivateKey: wrappedKeys.wrappedX25519PrivateKey,
+          wrappedEd25519PrivateKey: wrappedKeys.wrappedEd25519PrivateKey,
+          keyWrapNonce: wrappedKeys.keyWrapNonce,
+          keyWrapSalt: wrappedKeys.keyWrapSalt,
+          keyWrapParams: wrappedKeys.keyWrapParams,
+        } satisfies RegistrationVerificationState,
+      });
     } catch (error) {
       setErrors(toFormErrors(error));
     } finally {
@@ -256,4 +271,12 @@ function toFormErrors(error: unknown): FormErrors {
 function sentence(value: string): string {
   const text = value.charAt(0).toUpperCase() + value.slice(1);
   return text.endsWith('.') ? text : `${text}.`;
+}
+
+function getRegistrationMessage(state: unknown): string | undefined {
+  if (typeof state === 'object' && state !== null && 'registrationMessage' in state) {
+    const message = state.registrationMessage;
+    return typeof message === 'string' ? message : undefined;
+  }
+  return undefined;
 }

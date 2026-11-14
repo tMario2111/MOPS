@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -24,6 +25,7 @@ const (
 	badgerLoginPrefix        = "login:"
 	badgerSessionPrefix      = "session:"
 	registrationStateTTL     = 10 * time.Minute
+	verificationMaxAttempts  = 3
 	loginStateTTL            = 10 * time.Minute
 	sessionAbsoluteTTL       = 30 * 24 * time.Hour
 	sessionIdleTTL           = 24 * time.Hour
@@ -34,10 +36,20 @@ type badgerStore struct {
 	db *badger.DB
 }
 
+var errVerificationAttemptsExceeded = errors.New("verification attempts exceeded")
+
+type registrationVerificationResult struct {
+	Verified          bool
+	AttemptsRemaining int
+}
+
 type pendingRegistrationState struct {
-	Username string    `json:"username"`
-	Email    string    `json:"email"`
-	Created  time.Time `json:"created"`
+	Username             string    `json:"username"`
+	Email                string    `json:"email"`
+	VerificationCodeHash string    `json:"verification_code_hash"`
+	VerificationAttempts int       `json:"verification_attempts"`
+	EmailVerified        bool      `json:"email_verified"`
+	Created              time.Time `json:"created"`
 }
 
 type pendingLoginState struct {
@@ -116,6 +128,62 @@ func (s *badgerStore) getRegistration(id uuid.UUID) (pendingRegistrationState, e
 
 func (s *badgerStore) deleteRegistration(id uuid.UUID) error {
 	return s.delete(badgerRegistrationPrefix + id.String())
+}
+
+func (s *badgerStore) verifyRegistration(id uuid.UUID, code string) (registrationVerificationResult, error) {
+	result := registrationVerificationResult{AttemptsRemaining: verificationMaxAttempts}
+	attemptsExceeded := false
+	err := s.db.Update(func(txn *badger.Txn) error {
+		key := []byte(badgerRegistrationPrefix + id.String())
+		item, err := txn.Get(key)
+		if err != nil {
+			return err
+		}
+
+		var state pendingRegistrationState
+		if err := item.Value(func(value []byte) error {
+			return json.Unmarshal(value, &state)
+		}); err != nil {
+			return err
+		}
+		if state.EmailVerified {
+			result.Verified = true
+			result.AttemptsRemaining = verificationMaxAttempts - state.VerificationAttempts
+			return nil
+		}
+		result.AttemptsRemaining = verificationMaxAttempts - state.VerificationAttempts
+
+		codeHash := sha256.Sum256([]byte(code))
+		expectedHash, err := hex.DecodeString(state.VerificationCodeHash)
+		if err != nil {
+			return fmt.Errorf("decode verification code hash: %w", err)
+		}
+		if subtle.ConstantTimeCompare(codeHash[:], expectedHash) != 1 {
+			state.VerificationAttempts++
+			if state.VerificationAttempts >= verificationMaxAttempts {
+				attemptsExceeded = true
+				return txn.Delete(key)
+			}
+			result.AttemptsRemaining = verificationMaxAttempts - state.VerificationAttempts
+		} else {
+			state.EmailVerified = true
+			result.Verified = true
+		}
+
+		remaining := time.Until(state.Created.Add(registrationStateTTL))
+		if remaining <= 0 {
+			return badger.ErrKeyNotFound
+		}
+		data, err := json.Marshal(state)
+		if err != nil {
+			return fmt.Errorf("marshal registration state: %w", err)
+		}
+		return txn.SetEntry(badger.NewEntry(key, data).WithTTL(remaining))
+	})
+	if err == nil && attemptsExceeded {
+		err = errVerificationAttemptsExceeded
+	}
+	return result, err
 }
 
 func (s *badgerStore) putLogin(id uuid.UUID, state pendingLoginState) error {

@@ -2,10 +2,13 @@ package main
 
 import (
 	"crypto"
+	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"regexp"
@@ -20,11 +23,13 @@ import (
 )
 
 const (
-	maxOpaqueMessage = 16 * 1024
-	maxKeyMaterial   = 64 * 1024
+	maxOpaqueMessage       = 16 * 1024
+	maxKeyMaterial         = 64 * 1024
+	verificationCodeLength = 8
 )
 
 var usernamePattern = regexp.MustCompile(`^[a-z0-9]+(?:_[a-z0-9]+)*$`)
+var verificationCodePattern = regexp.MustCompile(`^[A-Z0-9]{8}$`)
 
 type registrationStartRequest struct {
 	Username      string `json:"username"`
@@ -123,15 +128,22 @@ func (h *authHandler) registerStart(c *gin.Context) {
 		return
 	}
 
+	verificationCode, err := generateVerificationCode()
+	if err != nil {
+		respondError(c, http.StatusInternalServerError, "could not create email verification code")
+		return
+	}
 	id := uuid.New()
 	if err := h.state.putRegistration(id, pendingRegistrationState{
-		Username: request.Username,
-		Email:    request.Email,
-		Created:  time.Now().UTC(),
+		Username:             request.Username,
+		Email:                request.Email,
+		VerificationCodeHash: hashVerificationCode(verificationCode),
+		Created:              time.Now().UTC(),
 	}); err != nil {
 		respondError(c, http.StatusInternalServerError, "could not store registration state")
 		return
 	}
+	log.Printf("mock email verification code for %s (%s): %s", request.Email, id, verificationCode)
 	c.JSON(http.StatusOK, registrationStartResponse{
 		RegistrationID: id.String(),
 		OpaqueResponse: encodeMessage(response.Serialize()),
@@ -157,6 +169,10 @@ func (h *authHandler) registerFinish(c *gin.Context) {
 	}
 	if err != nil {
 		respondError(c, http.StatusInternalServerError, "could not load registration state")
+		return
+	}
+	if !pending.EmailVerified {
+		respondError(c, http.StatusForbidden, "email verification is required")
 		return
 	}
 	if err := validateKeyMaterial(request); err != nil {
@@ -223,6 +239,46 @@ func (h *authHandler) registerFinish(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusCreated, gin.H{"id": user.ID.String(), "username": user.Username})
+}
+
+type registrationVerifyRequest struct {
+	RegistrationID string `json:"registration_id"`
+	Code           string `json:"code"`
+}
+
+func (h *authHandler) registerVerify(c *gin.Context) {
+	var request registrationVerifyRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		respondError(c, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	registrationID, err := uuid.Parse(request.RegistrationID)
+	if err != nil {
+		respondError(c, http.StatusBadRequest, "invalid registration_id")
+		return
+	}
+	result, err := h.state.verifyRegistration(registrationID, strings.TrimSpace(request.Code))
+	if errors.Is(err, errVerificationAttemptsExceeded) {
+		respondError(c, http.StatusGone, "verification attempts exceeded; restart registration")
+		return
+	}
+	if badgerStateError(err) {
+		respondError(c, http.StatusGone, "registration is missing or expired; restart registration")
+		return
+	}
+	if err != nil {
+		respondError(c, http.StatusInternalServerError, "could not verify email")
+		return
+	}
+	if !result.Verified {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":              "invalid verification code",
+			"attempts_remaining": result.AttemptsRemaining,
+		})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"verified": true})
 }
 
 type loginStartRequest struct {
@@ -412,6 +468,29 @@ func validateUsername(username string) error {
 		return errors.New("username must be 4-64 lowercase letters, digits, or underscores; underscores cannot lead, trail, or repeat")
 	}
 	return nil
+}
+
+func generateVerificationCode() (string, error) {
+	const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+	code := make([]byte, verificationCodeLength)
+	random := make([]byte, verificationCodeLength)
+	for i := range code {
+		for {
+			if _, err := rand.Read(random[i : i+1]); err != nil {
+				return "", err
+			}
+			if random[i] < 252 {
+				code[i] = alphabet[int(random[i])%len(alphabet)]
+				break
+			}
+		}
+	}
+	return string(code), nil
+}
+
+func hashVerificationCode(code string) string {
+	hash := sha256.Sum256([]byte(code))
+	return hex.EncodeToString(hash[:])
 }
 
 func validateKeyMaterial(request registrationFinishRequest) error {

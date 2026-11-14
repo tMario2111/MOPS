@@ -1,7 +1,9 @@
 package main
 
 import (
+	"errors"
 	"testing"
+	"time"
 
 	"github.com/dgraph-io/badger/v4"
 	"github.com/google/uuid"
@@ -81,5 +83,76 @@ func TestTemporaryStateRoundTrip(t *testing.T) {
 	}
 	if _, err := store.getRegistration(id); err != badger.ErrKeyNotFound {
 		t.Fatalf("expected deleted registration state to be unavailable, got %v", err)
+	}
+}
+
+func TestRegistrationVerificationAttempts(t *testing.T) {
+	store := newTestBadgerStore(t)
+	id := uuid.New()
+	code := "AB12CD34"
+	if err := store.putRegistration(id, pendingRegistrationState{
+		Email:                "test@example.com",
+		VerificationCodeHash: hashVerificationCode(code),
+		Created:              time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("put registration state: %v", err)
+	}
+
+	for attempt := 1; attempt <= verificationMaxAttempts; attempt++ {
+		result, err := store.verifyRegistration(id, "WRONG123")
+		if attempt == verificationMaxAttempts {
+			if !errors.Is(err, errVerificationAttemptsExceeded) {
+				t.Fatalf("final invalid verification attempt error = %v, want attempts exceeded", err)
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatalf("invalid verification attempt %d: %v", attempt, err)
+		}
+		if result.Verified {
+			t.Fatalf("invalid verification attempt %d succeeded", attempt)
+		}
+	}
+	if _, err := store.getRegistration(id); err != badger.ErrKeyNotFound {
+		t.Fatalf("expected registration to be invalidated after %d attempts, got %v", verificationMaxAttempts, err)
+	}
+}
+
+func TestRegistrationVerificationSucceeds(t *testing.T) {
+	store := newTestBadgerStore(t)
+	id := uuid.New()
+	code := "AB12CD34"
+	if err := store.putRegistration(id, pendingRegistrationState{
+		VerificationCodeHash: hashVerificationCode(code),
+		Created:              time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("put registration state: %v", err)
+	}
+
+	result, err := store.verifyRegistration(id, code)
+	if err != nil {
+		t.Fatalf("verify registration: %v", err)
+	}
+	if !result.Verified {
+		t.Fatal("expected verification to succeed")
+	}
+	state, err := store.getRegistration(id)
+	if err != nil {
+		t.Fatalf("get verified registration: %v", err)
+	}
+	if !state.EmailVerified {
+		t.Fatal("registration was not marked as verified")
+	}
+}
+
+func TestVerificationCodeFormat(t *testing.T) {
+	for i := 0; i < 100; i++ {
+		code, err := generateVerificationCode()
+		if err != nil {
+			t.Fatalf("generate verification code: %v", err)
+		}
+		if !verificationCodePattern.MatchString(code) {
+			t.Fatalf("generated invalid verification code %q", code)
+		}
 	}
 }
