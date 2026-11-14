@@ -42,17 +42,17 @@ interface RegistrationStartResult {
 }
 
 export interface RegistrationVerificationState {
-   registrationId: string;
-   username: string;
-   email: string;
-   opaqueRecord: string;
-   publicKey: string;
-   signingPublicKey: string;
-   wrappedX25519PrivateKey: string;
-   wrappedEd25519PrivateKey: string;
-   keyWrapNonce: string;
-   keyWrapSalt: string;
-   keyWrapParams: KeyWrapParams;
+  registrationId: string;
+  username: string;
+  email: string;
+  opaqueRecord: string;
+  publicKey: string;
+  signingPublicKey: string;
+  wrappedX25519PrivateKey: string;
+  wrappedEd25519PrivateKey: string;
+  keyWrapNonce: string;
+  keyWrapSalt: string;
+  keyWrapParams: KeyWrapParams;
 }
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;

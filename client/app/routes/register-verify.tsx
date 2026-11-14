@@ -2,12 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { FormEvent, ClipboardEvent, KeyboardEvent } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router';
 
-import {
-  AuthLayout,
-  FormAlert,
-  ShieldIcon,
-  SubmitButton,
-} from '../components/auth-layout';
+import { AuthLayout, FormAlert, ShieldIcon, SubmitButton } from '../components/auth-layout';
 import { ApiError, apiRequest } from '../lib/api';
 import {
   formatVerificationTime,
@@ -176,7 +171,11 @@ export default function RegisterVerify() {
     >
       <form className="space-y-5" noValidate onSubmit={(event) => void handleSubmit(event)}>
         <div>
-          <div className="flex justify-center gap-1 sm:gap-2" role="group" aria-label="Email verification code">
+          <div
+            className="flex justify-center gap-1 sm:gap-2"
+            role="group"
+            aria-label="Email verification code"
+          >
             {Array.from({ length: VERIFICATION_CODE_LENGTH }, (_, index) => (
               <input
                 key={index}
@@ -211,7 +210,11 @@ export default function RegisterVerify() {
           )}
         </div>
 
-        {error && <div className="mt-3"><FormAlert>{error}</FormAlert></div>}
+        {error && (
+          <div className="mt-3">
+            <FormAlert>{error}</FormAlert>
+          </div>
+        )}
         {!locked && !expired && (
           <>
             <SubmitButton
@@ -264,7 +267,9 @@ function getRegistrationState(state: unknown): RegistrationVerificationState | n
     'keyWrapSalt',
     'keyWrapParams',
   ] as const;
-  return required.every((key) => candidate[key] !== undefined) ? (candidate as RegistrationVerificationState) : null;
+  return required.every((key) => candidate[key] !== undefined)
+    ? (candidate as RegistrationVerificationState)
+    : null;
 }
 
 function toVerificationMessage(error: unknown): string {
