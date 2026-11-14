@@ -182,6 +182,44 @@ func TestRegistrationVerificationSucceeds(t *testing.T) {
 	if !state.EmailVerified {
 		t.Fatal("registration was not marked as verified")
 	}
+
+	result, err = store.verifyRegistration(id, "WRONG123")
+	if err != nil {
+		t.Fatalf("re-verification of verified registration: %v", err)
+	}
+	if !result.Verified {
+		t.Fatal("verified registration was not idempotent")
+	}
+}
+
+func TestRegistrationVerificationRejectsMalformedHash(t *testing.T) {
+	store := newTestBadgerStore(t)
+	id := uuid.New()
+	if err := store.putRegistration(id, pendingRegistrationState{
+		VerificationCodeHash: "not-a-hash",
+		Created:              time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("put registration state: %v", err)
+	}
+
+	if _, err := store.verifyRegistration(id, "AB12CD34"); err == nil {
+		t.Fatal("malformed verification hash unexpectedly accepted")
+	}
+}
+
+func TestRegistrationVerificationExpiredState(t *testing.T) {
+	store := newTestBadgerStore(t)
+	id := uuid.New()
+	if err := store.putRegistration(id, pendingRegistrationState{
+		VerificationCodeHash: hashVerificationCode("AB12CD34"),
+		Created:              time.Now().UTC().Add(-registrationStateTTL),
+	}); err != nil {
+		t.Fatalf("put registration state: %v", err)
+	}
+
+	if _, err := store.verifyRegistration(id, "AB12CD34"); err == nil {
+		t.Fatal("expired verification unexpectedly succeeded")
+	}
 }
 
 func TestVerificationCodeFormat(t *testing.T) {
