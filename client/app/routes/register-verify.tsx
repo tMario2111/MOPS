@@ -5,13 +5,16 @@ import { Link, useLocation, useNavigate } from 'react-router';
 import { AuthLayout, FormAlert, ShieldIcon, SubmitButton } from '../components/auth-layout';
 import { ApiError, apiRequest } from '../lib/api';
 import {
+  applyVerificationInput,
+  emptyVerificationCode,
   formatVerificationTime,
+  getRegistrationState,
   normalizeVerificationCode,
+  toVerificationMessage,
   VERIFICATION_CODE_LENGTH,
   VERIFICATION_MAX_ATTEMPTS,
   VERIFICATION_CODE_TTL_SECONDS,
 } from '../lib/email-verification';
-import type { RegistrationVerificationState } from './home';
 
 export function meta() {
   return [
@@ -24,9 +27,7 @@ export default function RegisterVerify() {
   const location = useLocation();
   const navigate = useNavigate();
   const registration = getRegistrationState(location.state);
-  const [characters, setCharacters] = useState<string[]>(() =>
-    Array.from({ length: VERIFICATION_CODE_LENGTH }, () => '')
-  );
+  const [characters, setCharacters] = useState<string[]>(emptyVerificationCode);
   const [remainingSeconds, setRemainingSeconds] = useState(VERIFICATION_CODE_TTL_SECONDS);
   const [attemptsRemaining, setAttemptsRemaining] = useState(VERIFICATION_MAX_ATTEMPTS);
   const [error, setError] = useState<string | null>(null);
@@ -77,20 +78,12 @@ export default function RegisterVerify() {
 
   function updateCode(value: string, focusIndex?: number) {
     const normalized = normalizeVerificationCode(value);
-    if (focusIndex === undefined || normalized.length > 1) {
-      setCharacters([
-        ...normalized.split(''),
-        ...Array.from({ length: VERIFICATION_CODE_LENGTH - normalized.length }, () => ''),
-      ]);
-      return;
-    }
-
-    setCharacters((current) => {
-      const next = [...current];
-      next[focusIndex] = normalized;
-      return next;
-    });
-    if (normalized !== '' && focusIndex < VERIFICATION_CODE_LENGTH - 1) {
+    setCharacters((current) => applyVerificationInput(current, normalized, focusIndex));
+    if (
+      focusIndex !== undefined &&
+      normalized.length === 1 &&
+      focusIndex < VERIFICATION_CODE_LENGTH - 1
+    ) {
       inputs.current[focusIndex + 1]?.focus();
     }
   }
@@ -150,7 +143,7 @@ export default function RegisterVerify() {
     } catch (verificationError) {
       if (verificationError instanceof ApiError && verificationError.status === 400) {
         setAttemptsRemaining((attempts) => Math.max(0, attempts - 1));
-        setCharacters(Array.from({ length: VERIFICATION_CODE_LENGTH }, () => ''));
+        setCharacters(emptyVerificationCode());
         inputs.current[0]?.focus();
       }
       if (verificationError instanceof ApiError && verificationError.status === 410) {
@@ -249,38 +242,4 @@ export default function RegisterVerify() {
       </form>
     </AuthLayout>
   );
-}
-
-function getRegistrationState(state: unknown): RegistrationVerificationState | null {
-  if (typeof state !== 'object' || state === null) return null;
-  const candidate = state as Partial<RegistrationVerificationState>;
-  const required = [
-    'registrationId',
-    'username',
-    'email',
-    'opaqueRecord',
-    'publicKey',
-    'signingPublicKey',
-    'wrappedX25519PrivateKey',
-    'wrappedEd25519PrivateKey',
-    'keyWrapNonce',
-    'keyWrapSalt',
-    'keyWrapParams',
-  ] as const;
-  return required.every((key) => candidate[key] !== undefined)
-    ? (candidate as RegistrationVerificationState)
-    : null;
-}
-
-function toVerificationMessage(error: unknown): string {
-  if (error instanceof ApiError) {
-    if (error.status === 400) {
-      return 'That code is not correct. Please check your email and try again.';
-    }
-    if (error.status === 410) {
-      return 'This verification session has ended. Please start registration again.';
-    }
-    return 'We could not verify your email right now. Please try again.';
-  }
-  return 'We could not verify your email right now. Please try again.';
 }

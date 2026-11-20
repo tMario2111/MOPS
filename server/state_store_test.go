@@ -222,6 +222,31 @@ func TestRegistrationVerificationExpiredState(t *testing.T) {
 	}
 }
 
+func TestDeleteMissingRegistration(t *testing.T) {
+	store := newTestBadgerStore(t)
+	if err := store.deleteRegistration(uuid.New()); !errors.Is(err, badger.ErrKeyNotFound) {
+		t.Fatalf("delete missing registration error = %v, want %v", err, badger.ErrKeyNotFound)
+	}
+}
+
+func TestRegistrationVerificationRejectsCorruptState(t *testing.T) {
+	store := newTestBadgerStore(t)
+	id := uuid.New()
+	if err := store.db.Update(func(txn *badger.Txn) error {
+		return txn.Set([]byte(badgerRegistrationPrefix+id.String()), []byte("{not json"))
+	}); err != nil {
+		t.Fatalf("write corrupt registration state: %v", err)
+	}
+
+	result, err := store.verifyRegistration(id, "AB12CD34")
+	if err == nil {
+		t.Fatal("corrupt registration state unexpectedly accepted")
+	}
+	if result.Verified {
+		t.Fatal("corrupt registration state must not be verified")
+	}
+}
+
 func TestVerificationCodeFormat(t *testing.T) {
 	for i := 0; i < 100; i++ {
 		code, err := generateVerificationCode()
