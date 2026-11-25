@@ -1,10 +1,6 @@
 export type CodeInputKind = 'alphanumeric' | 'numeric';
 
-export function normalizeCodeInput(
-  value: string,
-  length: number,
-  kind: CodeInputKind
-): string {
+export function normalizeCodeInput(value: string, length: number, kind: CodeInputKind): string {
   const allowed = kind === 'numeric' ? /[0-9]/ : /[A-Z0-9]/;
   const normalized = kind === 'numeric' ? value : value.toUpperCase();
   return normalized

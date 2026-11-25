@@ -1,11 +1,7 @@
 import { useEffect, useRef } from 'react';
 import type { ClipboardEvent, KeyboardEvent } from 'react';
 
-import {
-  applyCodeInput,
-  normalizeCodeInput,
-  type CodeInputKind,
-} from '../lib/code-input';
+import { applyCodeInput, normalizeCodeInput, type CodeInputKind } from '../lib/code-input';
 
 interface CodeBoxesProps {
   ariaLabel: string;

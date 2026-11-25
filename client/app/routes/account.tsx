@@ -219,8 +219,16 @@ function TOTPSettings({
         </p>
       </div>
 
-      {error && <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700" role="alert">{error}</p>}
-      {message && <p className="rounded-md bg-green-50 px-3 py-2 text-sm text-green-700" role="status">{message}</p>}
+      {error && (
+        <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700" role="alert">
+          {error}
+        </p>
+      )}
+      {message && (
+        <p className="rounded-md bg-green-50 px-3 py-2 text-sm text-green-700" role="status">
+          {message}
+        </p>
+      )}
 
       {!enabled && setup === null && (
         <button
@@ -237,15 +245,21 @@ function TOTPSettings({
         <form className="space-y-4" onSubmit={(event) => void enableTOTP(event)}>
           <div className="space-y-2 text-sm">
             <p>In your authenticator app, add an account using this setup key:</p>
-            <code className="block break-all rounded bg-slate-100 p-3 font-mono">{setup.secret}</code>
+            <code className="block break-all rounded bg-slate-100 p-3 font-mono">
+              {setup.secret}
+            </code>
             <a className="break-all text-blue-700 underline" href={setup.otpauth_url}>
               Open in authenticator app
             </a>
           </div>
           <div>
-            <p className="text-sm font-medium">Save these one-time recovery codes somewhere safe:</p>
+            <p className="text-sm font-medium">
+              Save these one-time recovery codes somewhere safe:
+            </p>
             <ul className="mt-2 grid grid-cols-2 gap-2 rounded bg-slate-100 p-3 font-mono text-xs">
-              {setup.recovery_codes.map((recoveryCode) => <li key={recoveryCode}>{recoveryCode}</li>)}
+              {setup.recovery_codes.map((recoveryCode) => (
+                <li key={recoveryCode}>{recoveryCode}</li>
+              ))}
             </ul>
           </div>
           <label className="flex items-center gap-2 text-sm">
@@ -268,7 +282,8 @@ function TOTPSettings({
             onChange={(event) => setCode(event.target.value.replace(/\D/g, '').slice(0, 6))}
           />
           <p className="text-xs text-slate-500">
-            {setupAttemptsRemaining} {setupAttemptsRemaining === 1 ? 'attempt' : 'attempts'} remaining
+            {setupAttemptsRemaining} {setupAttemptsRemaining === 1 ? 'attempt' : 'attempts'}{' '}
+            remaining
           </p>
           <div className="flex gap-2">
             <button
@@ -300,7 +315,9 @@ function TOTPSettings({
             <div>
               <p className="text-sm font-medium">Your recovery codes:</p>
               <ul className="mt-2 grid grid-cols-2 gap-2 rounded bg-slate-100 p-3 font-mono text-xs">
-                {recoveryCodes.map((recoveryCode) => <li key={recoveryCode}>{recoveryCode}</li>)}
+                {recoveryCodes.map((recoveryCode) => (
+                  <li key={recoveryCode}>{recoveryCode}</li>
+                ))}
               </ul>
             </div>
           )}
