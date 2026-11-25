@@ -431,6 +431,15 @@ func (h *authHandler) loginFinish(c *gin.Context) {
 			respondError(c, http.StatusInternalServerError, "could not finalize login")
 			return
 		}
+		locked, err := h.state.isTOTPLoginLocked(user.ID)
+		if err != nil {
+			respondError(c, http.StatusInternalServerError, "could not check two-factor attempts")
+			return
+		}
+		if locked {
+			respondError(c, http.StatusTooManyRequests, "too many incorrect codes; try again in 15 minutes")
+			return
+		}
 		challengeID := uuid.New()
 		if err := h.state.putTOTPLogin(challengeID, pendingTOTPLoginState{
 			UserID:    user.ID,

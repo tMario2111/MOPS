@@ -26,6 +26,7 @@ const (
 	badgerRegistrationEmailPrefix    = "registration-email:"
 	badgerTOTPSetupPrefix            = "totp-setup:"
 	badgerTOTPLoginPrefix            = "totp-login:"
+	badgerTOTPLoginAttemptsPrefix    = "totp-login-attempts:"
 	badgerTOTPDisablePrefix          = "totp-disable:"
 	badgerLoginPrefix                = "login:"
 	badgerSessionPrefix              = "session:"
@@ -36,6 +37,7 @@ const (
 	totpLoginChallengeTTL            = 5 * time.Minute
 	totpMaxAttempts                  = 5
 	totpLoginMaxAttempts             = totpMaxAttempts
+	totpLoginLockTTL                 = 15 * time.Minute
 	totpDisableMaxAttempts           = totpMaxAttempts
 	totpDisableLockTTL               = 15 * time.Minute
 	sessionAbsoluteTTL               = 30 * 24 * time.Hour
@@ -358,38 +360,89 @@ func (s *badgerStore) failTOTPLogin(id uuid.UUID) (int, error) {
 	attemptsExceeded := false
 	attemptsRemaining := 0
 	err := s.db.Update(func(txn *badger.Txn) error {
-		key := []byte(badgerTOTPLoginPrefix + id.String())
-		item, err := txn.Get(key)
+		challengeKey := []byte(badgerTOTPLoginPrefix + id.String())
+		item, err := txn.Get(challengeKey)
 		if err != nil {
 			return err
 		}
-		var state pendingTOTPLoginState
+		var challenge pendingTOTPLoginState
 		if err := item.Value(func(value []byte) error {
-			return json.Unmarshal(value, &state)
+			return json.Unmarshal(value, &challenge)
 		}); err != nil {
 			return err
 		}
-		state.Attempts++
-		attemptsRemaining = totpLoginMaxAttempts - state.Attempts
-		if attemptsRemaining <= 0 {
+		loginAttemptsKey := []byte(badgerTOTPLoginAttemptsPrefix + challenge.UserID.String())
+		loginAttempts := totpDisableAttemptState{CreatedAt: time.Now().UTC()}
+		attemptsItem, err := txn.Get(loginAttemptsKey)
+		if err == nil {
+			if err := attemptsItem.Value(func(value []byte) error {
+				return json.Unmarshal(value, &loginAttempts)
+			}); err != nil {
+				return err
+			}
+		} else if !errors.Is(err, badger.ErrKeyNotFound) {
+			return err
+		}
+		if loginAttempts.Attempts >= totpLoginMaxAttempts {
 			attemptsExceeded = true
-			return txn.Delete(key)
+			attemptsRemaining = 0
+			return txn.Delete(challengeKey)
 		}
 
-		remaining := time.Until(state.CreatedAt.Add(totpLoginChallengeTTL))
+		loginAttempts.Attempts++
+		attemptsRemaining = totpLoginMaxAttempts - loginAttempts.Attempts
+		if attemptsRemaining <= 0 {
+			attemptsExceeded = true
+			loginAttempts.CreatedAt = time.Now().UTC()
+		}
+
+		lockRemaining := time.Until(loginAttempts.CreatedAt.Add(totpLoginLockTTL))
+		if lockRemaining <= 0 {
+			loginAttempts.CreatedAt = time.Now().UTC()
+			lockRemaining = totpLoginLockTTL
+		}
+		loginAttemptsData, err := json.Marshal(loginAttempts)
+		if err != nil {
+			return fmt.Errorf("marshal TOTP login attempts: %w", err)
+		}
+		if err := txn.SetEntry(badger.NewEntry(loginAttemptsKey, loginAttemptsData).WithTTL(lockRemaining)); err != nil {
+			return err
+		}
+		if attemptsExceeded {
+			return txn.Delete(challengeKey)
+		}
+
+		challenge.Attempts++
+		remaining := time.Until(challenge.CreatedAt.Add(totpLoginChallengeTTL))
 		if remaining <= 0 {
 			return badger.ErrKeyNotFound
 		}
-		data, err := json.Marshal(state)
+		data, err := json.Marshal(challenge)
 		if err != nil {
 			return fmt.Errorf("marshal TOTP login state: %w", err)
 		}
-		return txn.SetEntry(badger.NewEntry(key, data).WithTTL(remaining))
+		return txn.SetEntry(badger.NewEntry(challengeKey, data).WithTTL(remaining))
 	})
 	if err == nil && attemptsExceeded {
 		err = errTOTPLoginAttemptsExceeded
 	}
 	return attemptsRemaining, err
+}
+
+func (s *badgerStore) isTOTPLoginLocked(userID uuid.UUID) (bool, error) {
+	var state totpDisableAttemptState
+	err := s.getJSON(badgerTOTPLoginAttemptsPrefix+userID.String(), &state)
+	if errors.Is(err, badger.ErrKeyNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return state.Attempts >= totpLoginMaxAttempts, nil
+}
+
+func (s *badgerStore) clearTOTPLoginAttempts(userID uuid.UUID) error {
+	return s.delete(badgerTOTPLoginAttemptsPrefix + userID.String())
 }
 
 func (s *badgerStore) failTOTPDisable(userID uuid.UUID) (int, error) {

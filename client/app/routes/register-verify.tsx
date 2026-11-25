@@ -1,15 +1,14 @@
-import { useEffect, useRef, useState } from 'react';
-import type { FormEvent, ClipboardEvent, KeyboardEvent } from 'react';
+import { useEffect, useState } from 'react';
+import type { FormEvent } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router';
 
+import { CodeBoxes } from '../components/code-boxes';
 import { AuthLayout, FormAlert, ShieldIcon, SubmitButton } from '../components/auth-layout';
 import { ApiError, apiRequest } from '../lib/api';
 import {
-  applyVerificationInput,
   emptyVerificationCode,
   formatVerificationTime,
   getRegistrationState,
-  normalizeVerificationCode,
   toVerificationMessage,
   VERIFICATION_CODE_LENGTH,
   VERIFICATION_MAX_ATTEMPTS,
@@ -32,7 +31,6 @@ export default function RegisterVerify() {
   const [attemptsRemaining, setAttemptsRemaining] = useState(VERIFICATION_MAX_ATTEMPTS);
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const inputs = useRef<Array<HTMLInputElement | null>>([]);
 
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -76,35 +74,6 @@ export default function RegisterVerify() {
   const expired = remainingSeconds === 0;
   const locked = attemptsRemaining === 0;
 
-  function updateCode(value: string, focusIndex?: number) {
-    const normalized = normalizeVerificationCode(value);
-    setCharacters((current) => applyVerificationInput(current, normalized, focusIndex));
-    if (
-      focusIndex !== undefined &&
-      normalized.length === 1 &&
-      focusIndex < VERIFICATION_CODE_LENGTH - 1
-    ) {
-      inputs.current[focusIndex + 1]?.focus();
-    }
-  }
-
-  function handlePaste(event: ClipboardEvent<HTMLInputElement>) {
-    event.preventDefault();
-    const pastedCode = normalizeVerificationCode(event.clipboardData.getData('text'));
-    updateCode(pastedCode);
-    inputs.current[Math.min(pastedCode.length, VERIFICATION_CODE_LENGTH - 1)]?.focus();
-  }
-
-  function handleKeyDown(event: KeyboardEvent<HTMLInputElement>, index: number) {
-    if (event.key === 'Backspace' && characters[index] === '' && index > 0) {
-      inputs.current[index - 1]?.focus();
-    }
-    if (event.key === 'ArrowLeft' && index > 0) inputs.current[index - 1]?.focus();
-    if (event.key === 'ArrowRight' && index < VERIFICATION_CODE_LENGTH - 1) {
-      inputs.current[index + 1]?.focus();
-    }
-  }
-
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError(null);
@@ -144,7 +113,6 @@ export default function RegisterVerify() {
       if (verificationError instanceof ApiError && verificationError.status === 400) {
         setAttemptsRemaining((attempts) => Math.max(0, attempts - 1));
         setCharacters(emptyVerificationCode());
-        inputs.current[0]?.focus();
       }
       if (verificationError instanceof ApiError && verificationError.status === 410) {
         setAttemptsRemaining(0);
@@ -164,31 +132,14 @@ export default function RegisterVerify() {
     >
       <form className="space-y-5" noValidate onSubmit={(event) => void handleSubmit(event)}>
         <div>
-          <div
-            className="flex justify-center gap-1 sm:gap-2"
-            role="group"
-            aria-label="Email verification code"
-          >
-            {Array.from({ length: VERIFICATION_CODE_LENGTH }, (_, index) => (
-              <input
-                key={index}
-                ref={(element) => {
-                  inputs.current[index] = element;
-                }}
-                aria-label={`Verification character ${index + 1}`}
-                autoComplete={index === 0 ? 'one-time-code' : 'off'}
-                className="size-9 rounded-lg border border-line bg-field text-center font-mono text-lg text-fg outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/25 sm:size-10"
-                inputMode="text"
-                maxLength={1}
-                type="text"
-                value={characters[index]}
-                disabled={locked || expired}
-                onChange={(event) => updateCode(event.target.value, index)}
-                onKeyDown={(event) => handleKeyDown(event, index)}
-                onPaste={handlePaste}
-              />
-            ))}
-          </div>
+          <CodeBoxes
+            ariaLabel="Email verification code"
+            characters={characters}
+            disabled={locked || expired}
+            kind="alphanumeric"
+            length={VERIFICATION_CODE_LENGTH}
+            onChange={setCharacters}
+          />
           <p className="mt-3 text-center text-[11px] text-muted">
             {expired
               ? 'Code expired.'

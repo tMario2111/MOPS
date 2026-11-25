@@ -291,15 +291,16 @@ func TestTOTPSetupAttemptLimit(t *testing.T) {
 
 func TestTOTPLoginChallengeAttempts(t *testing.T) {
 	store := newTestBadgerStore(t)
-	challengeID := uuid.New()
-	if err := store.putTOTPLogin(challengeID, pendingTOTPLoginState{
-		UserID:    uuid.New(),
-		CreatedAt: time.Now().UTC(),
-	}); err != nil {
-		t.Fatalf("put TOTP login challenge: %v", err)
-	}
+	userID := uuid.New()
 
 	for attempt := 1; attempt <= totpLoginMaxAttempts; attempt++ {
+		challengeID := uuid.New()
+		if err := store.putTOTPLogin(challengeID, pendingTOTPLoginState{
+			UserID:    userID,
+			CreatedAt: time.Now().UTC(),
+		}); err != nil {
+			t.Fatalf("put TOTP login challenge %d: %v", attempt, err)
+		}
 		remaining, err := store.failTOTPLogin(challengeID)
 		if attempt < totpLoginMaxAttempts {
 			if err != nil {
@@ -313,9 +314,36 @@ func TestTOTPLoginChallengeAttempts(t *testing.T) {
 		if !errors.Is(err, errTOTPLoginAttemptsExceeded) {
 			t.Fatalf("last challenge attempt error = %v, want attempts exceeded", err)
 		}
+		if _, err := store.getTOTPLogin(challengeID); !errors.Is(err, badger.ErrKeyNotFound) {
+			t.Fatalf("challenge was not invalidated after account lock: %v", err)
+		}
 	}
-	if _, err := store.getTOTPLogin(challengeID); !errors.Is(err, badger.ErrKeyNotFound) {
-		t.Fatalf("exhausted login challenge still exists: %v", err)
+	locked, err := store.isTOTPLoginLocked(userID)
+	if err != nil {
+		t.Fatalf("check TOTP login lock: %v", err)
+	}
+	if !locked {
+		t.Fatal("account was not locked after failed attempts across separate challenges")
+	}
+	extraChallengeID := uuid.New()
+	if err := store.putTOTPLogin(extraChallengeID, pendingTOTPLoginState{
+		UserID:    userID,
+		CreatedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("put challenge after account lock: %v", err)
+	}
+	if _, err := store.failTOTPLogin(extraChallengeID); !errors.Is(err, errTOTPLoginAttemptsExceeded) {
+		t.Fatalf("failure after account lock = %v, want attempts exceeded", err)
+	}
+	if err := store.clearTOTPLoginAttempts(userID); err != nil {
+		t.Fatalf("clear TOTP login attempts: %v", err)
+	}
+	locked, err = store.isTOTPLoginLocked(userID)
+	if err != nil {
+		t.Fatalf("check cleared TOTP login lock: %v", err)
+	}
+	if locked {
+		t.Fatal("account remained locked after clearing attempts")
 	}
 }
 

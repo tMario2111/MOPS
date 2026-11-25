@@ -2,6 +2,7 @@ import { useState } from 'react';
 import type { FormEvent } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router';
 
+import { CodeBoxes } from '../components/code-boxes';
 import {
   AuthLayout,
   CheckboxField,
@@ -11,6 +12,7 @@ import {
   TextField,
 } from '../components/auth-layout';
 import { ApiError, apiRequest, getFormValue } from '../lib/api';
+import { emptyCodeInput } from '../lib/code-input';
 import {
   OpaqueProtocolError,
   clearOpaqueSecrets,
@@ -35,6 +37,7 @@ interface LoginFinishResult {
 
 const INVALID_CREDENTIALS = 'Invalid username or password.';
 const USERNAME_PATTERN = /^(?=.{4,64}$)(?!_)(?!.*_$)(?!.*__)[a-z0-9_]+$/;
+const TOTP_CODE_LENGTH = 6;
 
 export default function Login() {
   const navigate = useNavigate();
@@ -42,7 +45,9 @@ export default function Login() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [totpChallengeID, setTotpChallengeID] = useState<string | null>(null);
-  const [totpCode, setTotpCode] = useState('');
+  const [totpCharacters, setTotpCharacters] = useState(() => emptyCodeInput(TOTP_CODE_LENGTH));
+  const [recoveryCode, setRecoveryCode] = useState('');
+  const [usingRecoveryCode, setUsingRecoveryCode] = useState(false);
   const registeredUsername = getRegisteredUsername(location.state);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -82,6 +87,9 @@ export default function Login() {
             throw new Error('The server returned an invalid two-factor challenge.');
           }
           setTotpChallengeID(finish.challenge_id);
+          setTotpCharacters(emptyCodeInput(TOTP_CODE_LENGTH));
+          setRecoveryCode('');
+          setUsingRecoveryCode(false);
           setError(null);
           return;
         }
@@ -100,7 +108,11 @@ export default function Login() {
   async function handleTOTPSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError(null);
-    if (totpChallengeID === null || totpCode.trim() === '') {
+    const code = usingRecoveryCode ? recoveryCode.trim() : totpCharacters.join('');
+    if (
+      totpChallengeID === null ||
+      (usingRecoveryCode ? code === '' : code.length !== TOTP_CODE_LENGTH)
+    ) {
       setError('Enter your authenticator or recovery code.');
       return;
     }
@@ -108,17 +120,24 @@ export default function Login() {
     setIsSubmitting(true);
     try {
       await apiRequest('/api/auth/login/totp', {
-        body: { challenge_id: totpChallengeID, code: totpCode.trim() },
+        body: { challenge_id: totpChallengeID, code },
       });
       void navigate('/friends');
     } catch (loginError) {
       if (loginError instanceof ApiError && loginError.status === 410) {
         setTotpChallengeID(null);
-        setTotpCode('');
+        setTotpCharacters(emptyCodeInput(TOTP_CODE_LENGTH));
+        setRecoveryCode('');
         setError('This sign-in attempt has expired. Please sign in again.');
       } else if (loginError instanceof ApiError && loginError.status === 401) {
-        setTotpCode('');
+        setTotpCharacters(emptyCodeInput(TOTP_CODE_LENGTH));
+        setRecoveryCode('');
         setError('That code was not accepted. Check it and try again.');
+      } else if (loginError instanceof ApiError && loginError.status === 429) {
+        setTotpChallengeID(null);
+        setTotpCharacters(emptyCodeInput(TOTP_CODE_LENGTH));
+        setRecoveryCode('');
+        setError('Too many incorrect codes. For your security, sign in again in 15 minutes.');
       } else {
         setError(toLoginMessage(loginError));
       }
@@ -155,16 +174,43 @@ export default function Login() {
         )}
 
         {totpChallengeID ? (
-          <TextField
-            id="totp-code"
-            name="totp-code"
-            label="Authenticator or recovery code"
-            type="text"
-            autoComplete="one-time-code"
-            placeholder="Enter your code"
-            value={totpCode}
-            onChange={(event) => setTotpCode(event.target.value.toUpperCase())}
-          />
+          <div className="space-y-3">
+            {usingRecoveryCode ? (
+              <TextField
+                id="totp-recovery-code"
+                name="totp-recovery-code"
+                label="Recovery code"
+                type="text"
+                autoComplete="one-time-code"
+                placeholder="Enter a recovery code"
+                value={recoveryCode}
+                onChange={(event) => setRecoveryCode(event.target.value.toUpperCase())}
+              />
+            ) : (
+              <>
+                <p className="text-center text-[12px] text-muted">Authenticator code</p>
+                <CodeBoxes
+                  ariaLabel="Authenticator code"
+                  characters={totpCharacters}
+                  kind="numeric"
+                  length={TOTP_CODE_LENGTH}
+                  onChange={setTotpCharacters}
+                />
+              </>
+            )}
+            <button
+              className="block w-full text-center text-[12px] font-medium text-accent hover:underline"
+              type="button"
+              onClick={() => {
+                setUsingRecoveryCode((usingRecovery) => !usingRecovery);
+                setTotpCharacters(emptyCodeInput(TOTP_CODE_LENGTH));
+                setRecoveryCode('');
+                setError(null);
+              }}
+            >
+              {usingRecoveryCode ? 'Use an authenticator code' : 'Use a recovery code'}
+            </button>
+          </div>
         ) : (
           <>
             <TextField
@@ -213,7 +259,9 @@ export default function Login() {
               type="button"
               onClick={() => {
                 setTotpChallengeID(null);
-                setTotpCode('');
+                setTotpCharacters(emptyCodeInput(TOTP_CODE_LENGTH));
+                setRecoveryCode('');
+                setUsingRecoveryCode(false);
                 setError(null);
               }}
             >

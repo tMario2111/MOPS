@@ -223,7 +223,10 @@ password or plaintext private keys.
    A correct TOTP code or unused recovery code completes the challenge, creates
    the session, and sets the session cookie. TOTP codes are accepted within a
    one-step clock window and the accepted time step cannot be reused. Recovery
-   codes are single-use. Five failed attempts invalidate the challenge.
+   codes are single-use. Five incorrect codes across all challenges lock
+   two-factor sign-in for that account for 15 minutes; the challenge that
+   reaches the limit is invalidated. A valid second factor clears the failed
+   attempt counter.
 
 ## Optional TOTP two-factor authentication
 
@@ -277,11 +280,14 @@ Badger stores short-lived protocol state:
 | Login state | `login:` | 10 minutes |
 | TOTP setup state | `totp-setup:` | 10 minutes |
 | TOTP login challenge | `totp-login:` | 5 minutes |
+| TOTP login failed-attempt lockout | `totp-login-attempts:` | 15 minutes |
 | TOTP disable lockout | `totp-disable:` | 15 minutes |
 
 Registration state includes the pending identity, a hash of the email
 verification code, the invalid-attempt count, and the verification status.
-TOTP login challenges contain only the user ID and failed-attempt count.
+TOTP login challenges contain only the user ID and challenge-local failed
+attempt count. A separate account-level counter prevents creating new challenges
+from resetting the five-attempt limit.
 
 Registration and login state is deleted after successful completion.
 

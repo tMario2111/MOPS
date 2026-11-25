@@ -254,6 +254,19 @@ func (h *authHandler) loginTOTP(c *gin.Context) {
 		respondError(c, http.StatusInternalServerError, "could not load two-factor challenge")
 		return
 	}
+	locked, err := h.state.isTOTPLoginLocked(challenge.UserID)
+	if err != nil {
+		respondError(c, http.StatusInternalServerError, "could not check two-factor attempts")
+		return
+	}
+	if locked {
+		if err := h.state.consumeTOTPLogin(challengeID); err != nil {
+			respondError(c, http.StatusInternalServerError, "could not finalize two-factor challenge")
+			return
+		}
+		respondError(c, http.StatusTooManyRequests, "too many incorrect codes; try again in 15 minutes")
+		return
+	}
 	var user User
 	if err := h.db.NewSelect().Model(&user).
 		Where("id = ?", challenge.UserID).
@@ -295,7 +308,7 @@ func (h *authHandler) loginTOTP(c *gin.Context) {
 	if !valid {
 		remaining, err := h.state.failTOTPLogin(challengeID)
 		if errors.Is(err, errTOTPLoginAttemptsExceeded) {
-			respondError(c, http.StatusGone, "too many incorrect codes; sign in again")
+			respondError(c, http.StatusTooManyRequests, "too many incorrect codes; try again in 15 minutes")
 			return
 		}
 		if errors.Is(err, badger.ErrKeyNotFound) {
@@ -314,6 +327,10 @@ func (h *authHandler) loginTOTP(c *gin.Context) {
 	}
 	if err := h.state.consumeTOTPLogin(challengeID); err != nil {
 		respondError(c, http.StatusInternalServerError, "could not complete two-factor challenge")
+		return
+	}
+	if err := h.state.clearTOTPLoginAttempts(user.ID); err != nil {
+		respondError(c, http.StatusInternalServerError, "could not reset two-factor attempts")
 		return
 	}
 	rawToken, session, err := newSession(h.state, user.ID)
