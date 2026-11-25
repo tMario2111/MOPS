@@ -13,6 +13,7 @@ type User struct {
 	ID                       uuid.UUID      `bun:"id,pk,type:uuid"`
 	Username                 string         `bun:"username,notnull,unique"`
 	Email                    string         `bun:"email,notnull,unique"`
+	TOTPSecretEncrypted      *string        `bun:"totp_secret_encrypted,nullzero"`
 	PublicKey                string         `bun:"public_key,notnull"`
 	SigningPublicKey         string         `bun:"signing_public_key,notnull"`
 	OpaqueRecord             string         `bun:"opaque_record,notnull"`

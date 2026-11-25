@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
@@ -42,6 +43,7 @@ func newTestAuthHandler(t *testing.T) *authHandler {
 		Identity: []byte("mops-test-server"),
 	}
 	t.Setenv("OPAQUE_SERVER_KEY_MATERIAL", hex.EncodeToString(material.Encode()))
+	t.Setenv("TOTP_ENCRYPTION_KEY", base64.StdEncoding.EncodeToString(make([]byte, totpEncryptionKeySize)))
 
 	handler, err := newAuthHandler(nil, newTestBadgerStore(t))
 	if err != nil {
@@ -538,5 +540,48 @@ func TestDecodeMessageValidation(t *testing.T) {
 	}
 	if _, err := decodeMessage(encodeMessage([]byte("valid")), maxOpaqueMessage); err != nil {
 		t.Fatalf("valid message rejected: %v", err)
+	}
+}
+
+func TestLoginTOTPRejectsInvalidAndMissingChallenges(t *testing.T) {
+	handler := &authHandler{
+		state:             newTestBadgerStore(t),
+		totpEncryptionKey: make([]byte, totpEncryptionKeySize),
+	}
+	tests := []struct {
+		name       string
+		body       string
+		wantStatus int
+		wantError  string
+	}{
+		{
+			name:       "invalid body",
+			body:       `{`,
+			wantStatus: http.StatusBadRequest,
+			wantError:  "invalid request body",
+		},
+		{
+			name:       "invalid challenge ID",
+			body:       `{"challenge_id":"nope","code":"123456"}`,
+			wantStatus: http.StatusBadRequest,
+			wantError:  "invalid challenge_id",
+		},
+		{
+			name:       "missing challenge",
+			body:       `{"challenge_id":"` + uuid.New().String() + `","code":"123456"}`,
+			wantStatus: http.StatusGone,
+			wantError:  "two-factor challenge expired; sign in again",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			status, response := callJSONHandler(t, handler.loginTOTP, "/api/auth/login/totp", test.body)
+			if status != test.wantStatus {
+				t.Fatalf("status = %d, want %d", status, test.wantStatus)
+			}
+			if response["error"] != test.wantError {
+				t.Fatalf("error = %q, want %q", response["error"], test.wantError)
+			}
+		})
 	}
 }

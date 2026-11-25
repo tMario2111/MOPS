@@ -201,9 +201,71 @@ password or plaintext private keys.
    and stores temporary login state in Badger.
 4. The client calls `opaque.client.finishLogin`.
 5. The client sends the finish request to `POST /api/auth/login/finish`.
-6. The server verifies the client MAC.
-7. The server creates an authenticated session and sets the `mops_session`
-   HttpOnly cookie.
+6. The server verifies the client MAC. If TOTP is disabled, it creates the
+   session and sets the `mops_session` HttpOnly cookie as usual. If TOTP is
+   enabled, it creates a five-minute, single-use challenge in Badger and
+   returns:
+
+   ```json
+   { "requires_totp": true, "challenge_id": "<uuid>" }
+   ```
+
+   No session or session cookie is issued at this point.
+7. The client asks for an authenticator or recovery code and sends:
+
+   ```http
+   POST /api/auth/login/totp
+   Content-Type: application/json
+
+   { "challenge_id": "<uuid>", "code": "123456" }
+   ```
+
+   A correct TOTP code or unused recovery code completes the challenge, creates
+   the session, and sets the session cookie. TOTP codes are accepted within a
+   one-step clock window and the accepted time step cannot be reused. Recovery
+   codes are single-use. Five failed attempts invalidate the challenge.
+
+## Optional TOTP two-factor authentication
+
+TOTP is optional and is layered after successful OPAQUE authentication. It
+does not change OPAQUE credentials or send the account password to the server.
+
+The server requires `TOTP_ENCRYPTION_KEY`, a base64-encoded random 32-byte key.
+It is a separate key from `OPAQUE_SERVER_KEY_MATERIAL`; keep it in the server's
+secret configuration and back it up securely. Losing or changing this key
+prevents decryption of all enrolled TOTP secrets and recovery-code hashes.
+The server fails to start when the key is missing or malformed.
+
+Enrollment and management requests require an authenticated session:
+
+1. `POST /api/auth/totp/setup` creates a random 160-bit TOTP secret and ten
+   random 128-bit recovery codes. The response includes the secret, an
+   `otpauth://` provisioning URI, and the recovery codes. The client presents
+   the setup key and asks the user to store the recovery codes.
+2. `POST /api/auth/totp/enable` with `{ "code": "123456" }` confirms that the
+   authenticator is configured. Only after a valid code does the server save
+   the encrypted secret and hashed recovery codes in
+   `users.totp_secret_encrypted`.
+3. `POST /api/auth/totp/disable` with a current authenticator code or an unused
+   recovery code disables TOTP. Five invalid attempts lock this operation for
+   15 minutes.
+
+The vault in `totp_secret_encrypted` is AES-256-GCM encrypted with
+`TOTP_ENCRYPTION_KEY`. It contains the base32 secret, recovery-code hashes, and
+the last accepted TOTP time step. A compare-and-update prevents concurrent
+requests from reusing a time step or recovery code. Pending enrollment vaults
+are encrypted before being stored in Badger and expire after ten minutes.
+
+The `users.totp_secret_encrypted` column must exist before starting the updated
+server. For an existing PostgreSQL database, apply this once if it has not
+already been added:
+
+```sql
+ALTER TABLE users
+ADD COLUMN IF NOT EXISTS totp_secret_encrypted TEXT NULL;
+```
+
+Fresh databases include the nullable column from the Bun `User` model.
 
 ## Badger temporary state
 
@@ -213,9 +275,13 @@ Badger stores short-lived protocol state:
 |---|---|---:|
 | Registration state | `registration:` | 10 minutes |
 | Login state | `login:` | 10 minutes |
+| TOTP setup state | `totp-setup:` | 10 minutes |
+| TOTP login challenge | `totp-login:` | 5 minutes |
+| TOTP disable lockout | `totp-disable:` | 15 minutes |
 
 Registration state includes the pending identity, a hash of the email
 verification code, the invalid-attempt count, and the verification status.
+TOTP login challenges contain only the user ID and failed-attempt count.
 
 Registration and login state is deleted after successful completion.
 

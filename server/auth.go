@@ -55,9 +55,10 @@ type registrationFinishRequest struct {
 }
 
 type authHandler struct {
-	db           *bun.DB
-	opaqueServer *opaque.Server
-	state        *badgerStore
+	db                *bun.DB
+	opaqueServer      *opaque.Server
+	state             *badgerStore
+	totpEncryptionKey []byte
 }
 
 func newAuthHandler(db *bun.DB, state *badgerStore) (*authHandler, error) {
@@ -89,11 +90,16 @@ func newAuthHandler(db *bun.DB, state *badgerStore) (*authHandler, error) {
 	if err := server.SetKeyMaterial(keyMaterial); err != nil {
 		return nil, fmt.Errorf("set OPAQUE server key material: %w", err)
 	}
+	totpEncryptionKey, err := decodeTOTPEncryptionKey(os.Getenv("TOTP_ENCRYPTION_KEY"))
+	if err != nil {
+		return nil, err
+	}
 
 	return &authHandler{
-		db:           db,
-		opaqueServer: server,
-		state:        state,
+		db:                db,
+		opaqueServer:      server,
+		state:             state,
+		totpEncryptionKey: totpEncryptionKey,
 	}, nil
 }
 
@@ -412,6 +418,34 @@ func (h *authHandler) loginFinish(c *gin.Context) {
 		return
 	}
 
+	var user User
+	if err := h.db.NewSelect().Model(&user).
+		Where("id = ?", state.UserID).
+		Where("deleted_at IS NULL").
+		Scan(c.Request.Context()); err != nil {
+		respondError(c, http.StatusInternalServerError, "could not load account")
+		return
+	}
+	if user.TOTPSecretEncrypted != nil && *user.TOTPSecretEncrypted != "" {
+		if err := h.state.deleteLogin(loginID); err != nil {
+			respondError(c, http.StatusInternalServerError, "could not finalize login")
+			return
+		}
+		challengeID := uuid.New()
+		if err := h.state.putTOTPLogin(challengeID, pendingTOTPLoginState{
+			UserID:    user.ID,
+			CreatedAt: time.Now().UTC(),
+		}); err != nil {
+			respondError(c, http.StatusInternalServerError, "could not create two-factor challenge")
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{
+			"requires_totp": true,
+			"challenge_id":  challengeID.String(),
+		})
+		return
+	}
+
 	rawToken, session, err := newSession(h.state, state.UserID)
 	if err != nil {
 		respondError(c, http.StatusInternalServerError, "could not create session")
@@ -456,9 +490,10 @@ func (h *authHandler) currentUser(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
-		"id":       user.ID.String(),
-		"username": user.Username,
-		"email":    user.Email,
+		"id":           user.ID.String(),
+		"username":     user.Username,
+		"email":        user.Email,
+		"totp_enabled": user.TOTPSecretEncrypted != nil && *user.TOTPSecretEncrypted != "",
 	})
 }
 

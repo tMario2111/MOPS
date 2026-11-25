@@ -24,11 +24,20 @@ const (
 	badgerRegistrationPrefix         = "registration:"
 	badgerRegistrationUsernamePrefix = "registration-username:"
 	badgerRegistrationEmailPrefix    = "registration-email:"
+	badgerTOTPSetupPrefix            = "totp-setup:"
+	badgerTOTPLoginPrefix            = "totp-login:"
+	badgerTOTPDisablePrefix          = "totp-disable:"
 	badgerLoginPrefix                = "login:"
 	badgerSessionPrefix              = "session:"
 	registrationStateTTL             = 10 * time.Minute
 	verificationMaxAttempts          = 3
 	loginStateTTL                    = 10 * time.Minute
+	totpSetupStateTTL                = 10 * time.Minute
+	totpLoginChallengeTTL            = 5 * time.Minute
+	totpMaxAttempts                  = 5
+	totpLoginMaxAttempts             = totpMaxAttempts
+	totpDisableMaxAttempts           = totpMaxAttempts
+	totpDisableLockTTL               = 15 * time.Minute
 	sessionAbsoluteTTL               = 30 * 24 * time.Hour
 	sessionIdleTTL                   = 24 * time.Hour
 	sessionCookieName                = "mops_session"
@@ -41,6 +50,9 @@ type badgerStore struct {
 var errVerificationAttemptsExceeded = errors.New("verification attempts exceeded")
 var errUsernameRegistrationPending = errors.New("username registration already pending")
 var errEmailRegistrationPending = errors.New("email registration already pending")
+var errTOTPLoginAttemptsExceeded = errors.New("TOTP login attempts exceeded")
+var errTOTPSetupAttemptsExceeded = errors.New("TOTP setup attempts exceeded")
+var errTOTPDisableAttemptsExceeded = errors.New("TOTP disable attempts exceeded")
 
 type registrationVerificationResult struct {
 	Verified          bool
@@ -60,6 +72,23 @@ type pendingLoginState struct {
 	UserID            uuid.UUID `json:"user_id"`
 	ExpectedClientMAC string    `json:"expected_client_mac"`
 	Created           time.Time `json:"created"`
+}
+
+type pendingTOTPSetupState struct {
+	EncryptedVault string    `json:"encrypted_vault"`
+	Attempts       int       `json:"attempts"`
+	Created        time.Time `json:"created"`
+}
+
+type pendingTOTPLoginState struct {
+	UserID    uuid.UUID `json:"user_id"`
+	Attempts  int       `json:"attempts"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+type totpDisableAttemptState struct {
+	Attempts  int       `json:"attempts"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 type sessionState struct {
@@ -258,6 +287,153 @@ func (s *badgerStore) getLogin(id uuid.UUID) (pendingLoginState, error) {
 
 func (s *badgerStore) deleteLogin(id uuid.UUID) error {
 	return s.delete(badgerLoginPrefix + id.String())
+}
+
+func (s *badgerStore) putTOTPSetup(userID uuid.UUID, state pendingTOTPSetupState) error {
+	return s.putJSON(badgerTOTPSetupPrefix+userID.String(), state, totpSetupStateTTL)
+}
+
+func (s *badgerStore) getTOTPSetup(userID uuid.UUID) (pendingTOTPSetupState, error) {
+	var state pendingTOTPSetupState
+	err := s.getJSON(badgerTOTPSetupPrefix+userID.String(), &state)
+	return state, err
+}
+
+func (s *badgerStore) deleteTOTPSetup(userID uuid.UUID) error {
+	return s.delete(badgerTOTPSetupPrefix + userID.String())
+}
+
+func (s *badgerStore) failTOTPSetup(userID uuid.UUID) (int, error) {
+	attemptsExceeded := false
+	attemptsRemaining := 0
+	err := s.db.Update(func(txn *badger.Txn) error {
+		key := []byte(badgerTOTPSetupPrefix + userID.String())
+		item, err := txn.Get(key)
+		if err != nil {
+			return err
+		}
+		var state pendingTOTPSetupState
+		if err := item.Value(func(value []byte) error {
+			return json.Unmarshal(value, &state)
+		}); err != nil {
+			return err
+		}
+		state.Attempts++
+		attemptsRemaining = totpMaxAttempts - state.Attempts
+		if attemptsRemaining <= 0 {
+			attemptsExceeded = true
+			return txn.Delete(key)
+		}
+		remaining := time.Until(state.Created.Add(totpSetupStateTTL))
+		if remaining <= 0 {
+			return badger.ErrKeyNotFound
+		}
+		data, err := json.Marshal(state)
+		if err != nil {
+			return fmt.Errorf("marshal TOTP setup state: %w", err)
+		}
+		return txn.SetEntry(badger.NewEntry(key, data).WithTTL(remaining))
+	})
+	if err == nil && attemptsExceeded {
+		err = errTOTPSetupAttemptsExceeded
+	}
+	return attemptsRemaining, err
+}
+
+func (s *badgerStore) putTOTPLogin(id uuid.UUID, state pendingTOTPLoginState) error {
+	return s.putJSON(badgerTOTPLoginPrefix+id.String(), state, totpLoginChallengeTTL)
+}
+
+func (s *badgerStore) getTOTPLogin(id uuid.UUID) (pendingTOTPLoginState, error) {
+	var state pendingTOTPLoginState
+	err := s.getJSON(badgerTOTPLoginPrefix+id.String(), &state)
+	return state, err
+}
+
+func (s *badgerStore) consumeTOTPLogin(id uuid.UUID) error {
+	return s.delete(badgerTOTPLoginPrefix + id.String())
+}
+
+func (s *badgerStore) failTOTPLogin(id uuid.UUID) (int, error) {
+	attemptsExceeded := false
+	attemptsRemaining := 0
+	err := s.db.Update(func(txn *badger.Txn) error {
+		key := []byte(badgerTOTPLoginPrefix + id.String())
+		item, err := txn.Get(key)
+		if err != nil {
+			return err
+		}
+		var state pendingTOTPLoginState
+		if err := item.Value(func(value []byte) error {
+			return json.Unmarshal(value, &state)
+		}); err != nil {
+			return err
+		}
+		state.Attempts++
+		attemptsRemaining = totpLoginMaxAttempts - state.Attempts
+		if attemptsRemaining <= 0 {
+			attemptsExceeded = true
+			return txn.Delete(key)
+		}
+
+		remaining := time.Until(state.CreatedAt.Add(totpLoginChallengeTTL))
+		if remaining <= 0 {
+			return badger.ErrKeyNotFound
+		}
+		data, err := json.Marshal(state)
+		if err != nil {
+			return fmt.Errorf("marshal TOTP login state: %w", err)
+		}
+		return txn.SetEntry(badger.NewEntry(key, data).WithTTL(remaining))
+	})
+	if err == nil && attemptsExceeded {
+		err = errTOTPLoginAttemptsExceeded
+	}
+	return attemptsRemaining, err
+}
+
+func (s *badgerStore) failTOTPDisable(userID uuid.UUID) (int, error) {
+	attemptsExceeded := false
+	attemptsRemaining := 0
+	key := badgerTOTPDisablePrefix + userID.String()
+	err := s.db.Update(func(txn *badger.Txn) error {
+		state := totpDisableAttemptState{CreatedAt: time.Now().UTC()}
+		item, err := txn.Get([]byte(key))
+		if err == nil {
+			if err := item.Value(func(value []byte) error {
+				return json.Unmarshal(value, &state)
+			}); err != nil {
+				return err
+			}
+		} else if !errors.Is(err, badger.ErrKeyNotFound) {
+			return err
+		}
+		state.Attempts++
+		attemptsRemaining = totpDisableMaxAttempts - state.Attempts
+		if attemptsRemaining <= 0 {
+			attemptsExceeded = true
+			attemptsRemaining = 0
+		}
+		data, err := json.Marshal(state)
+		if err != nil {
+			return fmt.Errorf("marshal TOTP disable state: %w", err)
+		}
+		return txn.SetEntry(badger.NewEntry([]byte(key), data).WithTTL(totpDisableLockTTL))
+	})
+	if err == nil && attemptsExceeded {
+		err = errTOTPDisableAttemptsExceeded
+	}
+	return attemptsRemaining, err
+}
+
+func (s *badgerStore) getTOTPDisableAttempts(userID uuid.UUID) (int, error) {
+	var state totpDisableAttemptState
+	err := s.getJSON(badgerTOTPDisablePrefix+userID.String(), &state)
+	return state.Attempts, err
+}
+
+func (s *badgerStore) clearTOTPDisableAttempts(userID uuid.UUID) error {
+	return s.delete(badgerTOTPDisablePrefix + userID.String())
 }
 
 func newSession(store *badgerStore, userID uuid.UUID) (string, sessionState, error) {
