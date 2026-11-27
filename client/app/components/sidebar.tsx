@@ -80,10 +80,9 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentUser }) => {
             Friends
           </button>
           <button
-            disabled={true}
-            onClick={() => void navigate('/settings')}
+            onClick={() => void navigate('/account')}
             className={`flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition ${
-              isActive('/settings') ? 'bg-accent-soft text-accent' : 'text-muted hover:bg-field'
+              isActive('/account') ? 'bg-accent-soft text-accent' : 'text-muted hover:bg-field'
             }`}
           >
             Settings

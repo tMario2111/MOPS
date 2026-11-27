@@ -47,7 +47,7 @@ func main() {
 
 	auth, err := newAuthHandler(db, state)
 	if err != nil {
-		log.Fatal("OPAQUE initialization failed: ", err)
+		log.Fatal("authentication initialization failed: ", err)
 	}
 
 	router := gin.New()
@@ -58,6 +58,7 @@ func main() {
 	router.POST("/api/auth/register/finish", auth.registerFinish)
 	router.POST("/api/auth/login/start", auth.loginStart)
 	router.POST("/api/auth/login/finish", auth.loginFinish)
+	router.POST("/api/auth/login/totp", auth.loginTOTP)
 
 	friendsHandler := newFriendsHandler(db)
 
@@ -70,6 +71,9 @@ func main() {
 	protected.GET("/auth/me", auth.currentUser)
 	protected.POST("/auth/logout", auth.logout)
 	protected.POST("/auth/logout-all", auth.logoutAll)
+	protected.POST("/auth/totp/setup", auth.totpSetup)
+	protected.POST("/auth/totp/enable", auth.totpEnable)
+	protected.POST("/auth/totp/disable", auth.totpDisable)
 
 	protected.POST("/friends/request", friendsHandler.sendRequest)
 	protected.GET("/friends/requests", friendsHandler.listRequests)

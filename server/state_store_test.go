@@ -258,3 +258,118 @@ func TestVerificationCodeFormat(t *testing.T) {
 		}
 	}
 }
+
+func TestTOTPSetupAttemptLimit(t *testing.T) {
+	store := newTestBadgerStore(t)
+	userID := uuid.New()
+	if err := store.putTOTPSetup(userID, pendingTOTPSetupState{
+		EncryptedVault: "placeholder",
+		Created:        time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("put TOTP setup: %v", err)
+	}
+
+	for attempt := 1; attempt <= totpMaxAttempts; attempt++ {
+		remaining, err := store.failTOTPSetup(userID)
+		if attempt < totpMaxAttempts {
+			if err != nil {
+				t.Fatalf("failed setup attempt %d: %v", attempt, err)
+			}
+			if remaining != totpMaxAttempts-attempt {
+				t.Fatalf("attempt %d remaining = %d", attempt, remaining)
+			}
+			continue
+		}
+		if !errors.Is(err, errTOTPSetupAttemptsExceeded) {
+			t.Fatalf("last setup attempt error = %v, want attempts exceeded", err)
+		}
+	}
+	if _, err := store.getTOTPSetup(userID); !errors.Is(err, badger.ErrKeyNotFound) {
+		t.Fatalf("exhausted setup state still exists: %v", err)
+	}
+}
+
+func TestTOTPLoginChallengeAttempts(t *testing.T) {
+	store := newTestBadgerStore(t)
+	userID := uuid.New()
+
+	for attempt := 1; attempt <= totpLoginMaxAttempts; attempt++ {
+		challengeID := uuid.New()
+		if err := store.putTOTPLogin(challengeID, pendingTOTPLoginState{
+			UserID:    userID,
+			CreatedAt: time.Now().UTC(),
+		}); err != nil {
+			t.Fatalf("put TOTP login challenge %d: %v", attempt, err)
+		}
+		remaining, err := store.failTOTPLogin(challengeID)
+		if attempt < totpLoginMaxAttempts {
+			if err != nil {
+				t.Fatalf("failed challenge attempt %d: %v", attempt, err)
+			}
+			if remaining != totpLoginMaxAttempts-attempt {
+				t.Fatalf("attempt %d remaining = %d", attempt, remaining)
+			}
+			continue
+		}
+		if !errors.Is(err, errTOTPLoginAttemptsExceeded) {
+			t.Fatalf("last challenge attempt error = %v, want attempts exceeded", err)
+		}
+		if _, err := store.getTOTPLogin(challengeID); !errors.Is(err, badger.ErrKeyNotFound) {
+			t.Fatalf("challenge was not invalidated after account lock: %v", err)
+		}
+	}
+	locked, err := store.isTOTPLoginLocked(userID)
+	if err != nil {
+		t.Fatalf("check TOTP login lock: %v", err)
+	}
+	if !locked {
+		t.Fatal("account was not locked after failed attempts across separate challenges")
+	}
+	extraChallengeID := uuid.New()
+	if err := store.putTOTPLogin(extraChallengeID, pendingTOTPLoginState{
+		UserID:    userID,
+		CreatedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("put challenge after account lock: %v", err)
+	}
+	if _, err := store.failTOTPLogin(extraChallengeID); !errors.Is(err, errTOTPLoginAttemptsExceeded) {
+		t.Fatalf("failure after account lock = %v, want attempts exceeded", err)
+	}
+	if err := store.clearTOTPLoginAttempts(userID); err != nil {
+		t.Fatalf("clear TOTP login attempts: %v", err)
+	}
+	locked, err = store.isTOTPLoginLocked(userID)
+	if err != nil {
+		t.Fatalf("check cleared TOTP login lock: %v", err)
+	}
+	if locked {
+		t.Fatal("account remained locked after clearing attempts")
+	}
+}
+
+func TestTOTPDisableAttemptsRemainLocked(t *testing.T) {
+	store := newTestBadgerStore(t)
+	userID := uuid.New()
+	for attempt := 1; attempt <= totpDisableMaxAttempts; attempt++ {
+		remaining, err := store.failTOTPDisable(userID)
+		if attempt < totpDisableMaxAttempts {
+			if err != nil {
+				t.Fatalf("failed disable attempt %d: %v", attempt, err)
+			}
+			if remaining != totpDisableMaxAttempts-attempt {
+				t.Fatalf("attempt %d remaining = %d", attempt, remaining)
+			}
+			continue
+		}
+		if !errors.Is(err, errTOTPDisableAttemptsExceeded) {
+			t.Fatalf("last disable attempt error = %v, want attempts exceeded", err)
+		}
+	}
+	attempts, err := store.getTOTPDisableAttempts(userID)
+	if err != nil {
+		t.Fatalf("get locked disable attempts: %v", err)
+	}
+	if attempts < totpDisableMaxAttempts {
+		t.Fatalf("disable lock attempts = %d, want at least %d", attempts, totpDisableMaxAttempts)
+	}
+}

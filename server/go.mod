@@ -3,6 +3,7 @@ module chatapp/server
 go 1.27.3
 
 require (
+	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/bytemare/ksf v0.5.0
 	github.com/bytemare/opaque v0.18.0
 	github.com/dgraph-io/badger/v4 v4.9.6
