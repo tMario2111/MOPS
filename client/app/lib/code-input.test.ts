@@ -29,6 +29,17 @@ describe('numeric code input', () => {
     ]);
   });
 
+  it('pads a partial paste with empty boxes', () => {
+    expect(applyCodeInput(['9', '9', '9', '9', '9', '9'], '12', undefined, 6)).toEqual([
+      '1',
+      '2',
+      '',
+      '',
+      '',
+      '',
+    ]);
+  });
+
   it('creates an empty set of boxes for the requested length', () => {
     expect(emptyCodeInput(6)).toEqual(['', '', '', '', '', '']);
   });

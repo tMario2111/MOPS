@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ApiError } from '../lib/api';
 import { cleanup, click, render, setInputValue, settle, submit } from '../../test/test-utils';
-import Account from './account';
+import Account, { meta } from './account';
 
 const { apiRequestMock, navigateMock } = vi.hoisted(() => ({
   apiRequestMock: vi.fn(),
@@ -180,5 +180,113 @@ describe('Account TOTP settings', () => {
     click(button('Log out'));
     await settle();
     expect(navigateMock).toHaveBeenCalledWith('/login');
+  });
+
+  it('exposes page metadata', () => {
+    expect(meta()).toEqual([
+      { title: 'Account' },
+      { name: 'description', content: 'Authenticated account' },
+    ]);
+  });
+
+  it('shows a load error that is not an expired session', async () => {
+    apiRequestMock.mockRejectedValueOnce(new ApiError('Server unavailable', 500));
+    container = render(<Account />).container;
+    await settle();
+    expect(container.textContent).toContain('Server unavailable');
+    expect(navigateMock).not.toHaveBeenCalled();
+  });
+
+  it('treats a 401 during logout as already logged out', async () => {
+    await renderAccount();
+    apiRequestMock.mockRejectedValueOnce(new ApiError('unauthorized', 401));
+    click(button('Log out'));
+    await settle();
+    expect(navigateMock).toHaveBeenCalledWith('/login');
+  });
+
+  it.each([
+    [new ApiError('not configured', 503), 'Two-factor authentication is not available right now.'],
+    [new ApiError('conflict', 409), 'conflict'],
+    ['unexpected', 'Could not setup two-factor authentication. Please try again.'],
+  ])('reports a failed setup start (%s)', async (failure, message) => {
+    await renderAccount();
+    apiRequestMock.mockRejectedValueOnce(failure);
+    click(button('Set up authenticator'));
+    await settle();
+    expect(container?.textContent).toContain(message);
+    expect(button('Set up authenticator').disabled).toBe(false);
+  });
+
+  it('cancels an enrollment and shows the singular attempt label', async () => {
+    await renderAccount();
+    apiRequestMock.mockResolvedValueOnce(setup);
+    click(button('Set up authenticator'));
+    await settle();
+
+    const checkbox = container?.querySelector<HTMLInputElement>('input[type="checkbox"]');
+    const code = container?.querySelector<HTMLInputElement>('#totp-enable-code');
+    const form = code?.closest('form');
+    if (!checkbox || !code || !form) throw new Error('Missing setup form controls');
+    click(checkbox);
+    setInputValue(code, '123456');
+    for (let attempt = 0; attempt < 4; attempt++) {
+      apiRequestMock.mockRejectedValueOnce(new ApiError('invalid', 400));
+      await submit(form);
+    }
+    expect(container?.textContent).toContain('1 attempt remaining');
+
+    click(button('Cancel'));
+    expect(container?.textContent).not.toContain(setup.secret);
+    expect(button('Set up authenticator')).toBeDefined();
+  });
+
+  it('shows recovery codes after enabling and clears them after disabling', async () => {
+    await renderAccount();
+    apiRequestMock.mockResolvedValueOnce(setup);
+    click(button('Set up authenticator'));
+    await settle();
+    const checkbox = container?.querySelector<HTMLInputElement>('input[type="checkbox"]');
+    const code = container?.querySelector<HTMLInputElement>('#totp-enable-code');
+    const form = code?.closest('form');
+    if (!checkbox || !code || !form) throw new Error('Missing setup form controls');
+    click(checkbox);
+    setInputValue(code, '123456');
+    apiRequestMock.mockResolvedValueOnce(undefined);
+    await submit(form);
+
+    expect(container?.textContent).toContain('Your recovery codes:');
+    expect(container?.textContent).toContain('CCCC-DDDD');
+
+    const disableCode = container?.querySelector<HTMLInputElement>('#totp-disable-code');
+    const disableForm = disableCode?.closest('form');
+    if (!disableCode || !disableForm) throw new Error('Missing disable form');
+    setInputValue(disableCode, 'AAAA-BBBB');
+    apiRequestMock.mockResolvedValueOnce(undefined);
+    await submit(disableForm);
+    expect(apiRequestMock).toHaveBeenLastCalledWith('/api/auth/totp/disable', {
+      body: { code: 'AAAA-BBBB' },
+    });
+    expect(container?.textContent).not.toContain('Your recovery codes:');
+  });
+
+  it.each([
+    [
+      new ApiError('locked', 429),
+      'Too many incorrect codes. Please wait 15 minutes before trying again.',
+    ],
+    [new ApiError('not configured', 503), 'Two-factor authentication is not available right now.'],
+    [new Error('Network unavailable'), 'Network unavailable'],
+    [null, 'Could not disable two-factor authentication. Please try again.'],
+  ])('reports a failed disable (%s)', async (failure, message) => {
+    await renderAccount({ ...user, totp_enabled: true });
+    const code = container?.querySelector<HTMLInputElement>('#totp-disable-code');
+    const form = code?.closest('form');
+    if (!code || !form) throw new Error('Missing disable form');
+    setInputValue(code, '123456');
+    apiRequestMock.mockRejectedValueOnce(failure);
+    await submit(form);
+    expect(container?.textContent).toContain(message);
+    expect(container?.textContent).toContain('An authenticator code is required when you sign in.');
   });
 });

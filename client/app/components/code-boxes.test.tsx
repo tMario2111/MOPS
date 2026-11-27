@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 
+import { useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { CodeBoxes } from './code-boxes';
@@ -133,5 +134,52 @@ describe('CodeBoxes', () => {
     boxes[2].dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true }));
 
     expect(document.activeElement).toBe(boxes[1]);
+  });
+
+  it('refocuses the first box when a filled code is cleared', () => {
+    function Harness() {
+      const [characters, setCharacters] = useState(['1', '2', '3', '', '', '']);
+      return (
+        <>
+          <CodeBoxes
+            ariaLabel="Authenticator code"
+            characters={characters}
+            kind="numeric"
+            length={6}
+            onChange={setCharacters}
+          />
+          <button type="button" onClick={() => setCharacters(['', '', '', '', '', ''])}>
+            Reset
+          </button>
+        </>
+      );
+    }
+    const result = render(<Harness />);
+    container = result.container;
+    const boxes = container.querySelectorAll('input');
+    boxes[3].focus();
+
+    const reset = container.querySelector('button');
+    if (!reset) throw new Error('Missing reset button');
+    click(reset);
+
+    expect(document.activeElement).toBe(boxes[0]);
+    expect(boxes[0].value).toBe('');
+  });
+
+  it('renders missing characters as empty boxes', () => {
+    const result = render(
+      <CodeBoxes
+        ariaLabel="Authenticator code"
+        characters={['1']}
+        kind="alphanumeric"
+        length={3}
+        onChange={vi.fn()}
+      />
+    );
+    container = result.container;
+    const boxes = container.querySelectorAll('input');
+    expect([...boxes].map((box) => box.value)).toEqual(['1', '', '']);
+    expect(boxes[0].getAttribute('inputmode')).toBe('text');
   });
 });
